@@ -221,11 +221,21 @@ async fn main() -> Result<()> {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
+    info!("Registering inference protocol handler...");
+    let inference_protocol = InferenceProtocol::new(inference_node_shared.clone());
+    network
+        .router()
+        .endpoint()
+        .add_protocol(INFERENCE_ALPN, inference_protocol.into())
+        .await?;
+    info!("Protocol handler registered");
+
     // announce availability via gossip
     let model_name_for_broadcast = match &*model_state.read().await {
         ModelLoadState::Loaded(name) => Some(name.clone()),
         _ => None,
     };
+
     let availability_msg = InferenceGossipMessage::NodeAvailable {
         model_name: model_name_for_broadcast.clone(),
         checkpoint_id: None,

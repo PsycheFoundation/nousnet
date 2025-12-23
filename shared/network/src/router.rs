@@ -33,7 +33,15 @@ pub(crate) fn spawn_router<P: ProtocolHandler + Clone>(
         .accept(iroh_blobs::ALPN, protocols.1)
         .accept(p2p_model_sharing::ALPN, protocols.2);
 
+<<<<<<< HEAD
+<<<<<<< HEAD
     // add optional custom protocol if provided
+=======
+    // add optional additional custom protocol
+>>>>>>> 3cbb6439 (Adding additional protocols vec to P2PNetwork init, updating protocol param type to be optional, single protocol, and generic, adding justfile commands and test script to test inference)
+=======
+    // add optional custom protocol if provided
+>>>>>>> 0af54f3d (Updating init method changes for shared network to have an optional ProtocolHandler method and custom protocol code path)
     if let Some((alpn, handler)) = additional_protocol {
         builder = builder.accept(alpn, handler);
     }
