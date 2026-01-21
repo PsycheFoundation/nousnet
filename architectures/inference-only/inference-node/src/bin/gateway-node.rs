@@ -20,22 +20,16 @@ use clap::Parser;
 use psyche_inference::{
     INFERENCE_ALPN, InferenceGossipMessage, InferenceMessage, InferenceRequest, InferenceResponse,
 };
-#[cfg(feature = "gateway")]
 use psyche_metrics::ClientMetrics;
-#[cfg(feature = "gateway")]
 use psyche_network::{
     DiscoveryMode, EndpointId, NetworkConnection, NetworkEvent, RelayKind, allowlist,
 };
-#[cfg(feature = "gateway")]
-use std::{collections::HashMap, fs, sync::Arc, time::Duration};
-#[cfg(feature = "gateway")]
+use std::{collections::HashMap, fs, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     sync::{RwLock, mpsc},
     time::sleep,
 };
-#[cfg(feature = "gateway")]
 use tokio_util::sync::CancellationToken;
-#[cfg(feature = "gateway")]
 use tracing::{debug, error, info};
 
 #[derive(Parser, Debug)]
@@ -58,7 +52,6 @@ struct Args {
     write_endpoint_file: Option<PathBuf>,
 }
 
-#[cfg(feature = "gateway")]
 #[derive(Clone, Debug)]
 struct InferenceNodeInfo {
     peer_id: EndpointId,
@@ -69,7 +62,6 @@ struct InferenceNodeInfo {
     capabilities: Vec<String>,
 }
 
-#[cfg(feature = "gateway")]
 struct GatewayState {
     available_nodes: RwLock<HashMap<EndpointId, InferenceNodeInfo>>,
     pending_requests: RwLock<HashMap<String, mpsc::Sender<InferenceResponse>>>,
@@ -97,15 +89,12 @@ struct ChatCompletionRequest {
     stream: bool,
 }
 
-#[cfg(feature = "gateway")]
 fn default_max_tokens() -> Option<usize> {
     Some(100)
 }
-#[cfg(feature = "gateway")]
 fn default_temperature() -> Option<f64> {
     Some(1.0)
 }
-#[cfg(feature = "gateway")]
 fn default_top_p() -> Option<f64> {
     Some(1.0)
 }
@@ -151,8 +140,18 @@ async fn handle_inference(
     Json(req): Json<ChatCompletionRequest>,
 ) -> Result<Json<ChatCompletionResponse>, AppError> {
     let nodes = state.available_nodes.read().await;
-    let node = nodes.values().next().ok_or(AppError::NoNodesAvailable)?;
 
+    // Filter nodes that have a model loaded (not idle)
+    let nodes_with_model: Vec<_> = nodes.values().filter(|n| n.model_name.is_some()).collect();
+
+    if nodes_with_model.is_empty() {
+        // No nodes have models loaded yet
+        return Err(AppError::NoNodesAvailable);
+    }
+
+    // Select first available node with a model
+    // TODO: Add load balancing and model-specific routing in the future
+    let node = nodes_with_model[0];
     let target_peer_id = node.peer_id;
 
     let model_name = req
@@ -163,10 +162,9 @@ async fn handle_inference(
 
     info!(
         "Routing request to node: {} (model: {})",
-        node.peer_id.fmt_short(),
+        target_peer_id.fmt_short(),
         node.model_name.as_ref().unwrap_or(&"unknown".to_string())
     );
-    let target_peer_id = node.peer_id;
     drop(nodes);
 
     let messages: Vec<psyche_inference::ChatMessage> = req
@@ -453,7 +451,7 @@ async fn run_gateway() -> Result<()> {
 
     info!("Gossip mesh should be ready");
 
-    let (network_tx, mut network_rx) = mpsc::channel::<InferenceMessage>(100);
+    let (network_tx, mut network_rx) = mpsc::channel::<(EndpointId, InferenceMessage)>(100);
     let (gossip_tx, mut gossip_rx) = mpsc::channel::<InferenceGossipMessage>(100);
     let state = Arc::new(GatewayState {
         available_nodes: RwLock::new(HashMap::new()),
@@ -520,7 +518,7 @@ async fn run_gateway() -> Result<()> {
 
                     Some(_) = task_set.join_next(), if !task_set.is_empty() => {
                     }
-                    
+
                     Some(gossip_msg) = gossip_rx.recv() => {
                         info!("Broadcasting gossip message: {:?}", gossip_msg);
                         if let Err(e) = network.broadcast(&gossip_msg) {
