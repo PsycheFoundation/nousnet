@@ -9,13 +9,11 @@
 //! - Supports dynamic checkpoint reloading
 
 use anyhow::{Context, Result};
-<<<<<<< HEAD
-use clap::{Args as ClapArgs, Parser, Subcommand};
-=======
 use clap::Parser;
 use iroh::EndpointAddr;
->>>>>>> 06e849bc (Bootstrapping from file and env variable, adding direct connection P2P response handling)
-use psyche_inference::{INFERENCE_ALPN, InferenceGossipMessage, InferenceNode, InferenceProtocol};
+use psyche_inference::{
+    INFERENCE_ALPN, InferenceGossipMessage, InferenceNode, InferenceProtocol, ModelSource,
+};
 use psyche_metrics::ClientMetrics;
 use psyche_network::{DiscoveryMode, NetworkConnection, NetworkEvent, RelayKind, allowlist};
 use std::path::PathBuf;
@@ -135,67 +133,10 @@ async fn main() -> Result<()> {
     info!("Relay kind: {:?}", run_args.relay_kind);
     info!("Capabilities: {:?}", capabilities);
 
-<<<<<<< HEAD
     let bootstrap_peers = psyche_inference_node::load_bootstrap_peers(
         run_args.bootstrap_peer_file.as_ref(),
         "No bootstrap peers configured (no env vars or CLI args)",
     )?;
-=======
-    // read bootstrap peers from multiple sources in priority order
-    let bootstrap_peers: Vec<EndpointAddr> =
-        if let Ok(endpoints_json) = std::env::var("PSYCHE_GATEWAY_ENDPOINTS") {
-            // production: JSON array of gateway endpoints
-            info!("Reading gateway endpoints from PSYCHE_GATEWAY_ENDPOINTS env var");
-            let peers: Vec<EndpointAddr> = serde_json::from_str(&endpoints_json)
-                .context("Failed to parse PSYCHE_GATEWAY_ENDPOINTS as JSON array")?;
-            info!("Loaded {} gateway endpoint(s) from env var", peers.len());
-            for peer in &peers {
-                info!("  Gateway: {}", peer.id.fmt_short());
-            }
-            peers
-        } else if let Ok(file_path) = std::env::var("PSYCHE_GATEWAY_BOOTSTRAP_FILE") {
-            // alternative: env var pointing to file
-            let peer_file = PathBuf::from(file_path);
-            if peer_file.exists() {
-                info!(
-                    "Reading bootstrap peers from PSYCHE_GATEWAY_BOOTSTRAP_FILE: {:?}",
-                    peer_file
-                );
-                let content = fs::read_to_string(&peer_file)
-                    .context("Failed to read gateway bootstrap file")?;
-                let peers: Vec<EndpointAddr> = serde_json::from_str(&content)
-                    .context("Failed to parse gateway bootstrap file as JSON array")?;
-                info!("Loaded {} gateway endpoint(s) from file", peers.len());
-                peers
-            } else {
-                info!("Gateway bootstrap file not found, starting without peers");
-                vec![]
-            }
-        } else if let Some(ref peer_file) = args.bootstrap_peer_file {
-            // local testing: CLI argument
-            if peer_file.exists() {
-                info!("Reading bootstrap peer from {:?}", peer_file);
-                let content =
-                    fs::read_to_string(peer_file).context("Failed to read bootstrap peer file")?;
-                // Support both single endpoint and array
-                if let Ok(peer) = serde_json::from_str::<EndpointAddr>(&content) {
-                    info!("Bootstrap peer: {}", peer.id.fmt_short());
-                    vec![peer]
-                } else {
-                    let peers: Vec<EndpointAddr> = serde_json::from_str(&content)
-                        .context("Failed to parse bootstrap peer file")?;
-                    info!("Loaded {} bootstrap peer(s)", peers.len());
-                    peers
-                }
-            } else {
-                info!("Bootstrap peer file not found, starting without peers");
-                vec![]
-            }
-        } else {
-            info!("No bootstrap peers configured (no env vars or CLI args)");
-            vec![]
-        };
->>>>>>> 06e849bc (Bootstrapping from file and env variable, adding direct connection P2P response handling)
 
     let cancel = CancellationToken::new();
 
@@ -203,23 +144,31 @@ async fn main() -> Result<()> {
     pyo3::prepare_freethreaded_python();
     info!("Python interpreter initialized");
 
-    info!("Initializing vLLM engine...");
-    let mut inference_node = InferenceNode::new(
-        model_name.clone(),
-        Some(run_args.tensor_parallel_size),
-        Some(run_args.gpu_memory_utilization),
-    );
-
-    inference_node
-        .initialize(
+    let inference_node_shared = if let Some(ref model_name) = args.model_name {
+        info!("Initializing vLLM engine with model: {}...", model_name);
+        let mut inference_node = InferenceNode::new(
+            model_name.clone(),
             Some(run_args.tensor_parallel_size),
             Some(run_args.gpu_memory_utilization),
-        )
-        .context("Failed to initialize vLLM engine")?;
+        );
 
-    info!("vLLM engine initialized successfully");
+        inference_node
+            .initialize(
+                Some(args.tensor_parallel_size),
+                Some(args.gpu_memory_utilization),
+            )
+            .context("Failed to initialize vLLM engine")?;
 
-    let inference_node_shared = Arc::new(RwLock::new(Some(inference_node)));
+        info!("vLLM engine initialized successfully");
+        Arc::new(RwLock::new(Some(inference_node)))
+    } else {
+        info!("No initial model - starting in idle mode");
+        Arc::new(RwLock::new(None))
+    };
+
+    let current_model_name = Arc::new(RwLock::new(args.model_name.clone()));
+    let tensor_parallel_size = args.tensor_parallel_size;
+    let gpu_memory_utilization = args.gpu_memory_utilization;
 
     info!("Initializing P2P network...");
 
@@ -235,13 +184,8 @@ async fn main() -> Result<()> {
         run_id,
         None, // port (let OS choose)
         None, // interface
-<<<<<<< HEAD
         run_args.discovery_mode,
         run_args.relay_kind,
-=======
-        discovery_mode,
-        relay_kind,
->>>>>>> 06e849bc (Bootstrapping from file and env variable, adding direct connection P2P response handling)
         bootstrap_peers,
         None,                // secret key (generate new)
         allowlist::AllowAll, // No allowlist for inference network
@@ -256,11 +200,7 @@ async fn main() -> Result<()> {
     info!("  Endpoint ID: {}", network.endpoint_id());
     info!("Protocol handler registered");
 
-<<<<<<< HEAD
     if let Some(ref endpoint_file) = run_args.write_endpoint_file {
-=======
-    if let Some(ref endpoint_file) = args.write_endpoint_file {
->>>>>>> 06e849bc (Bootstrapping from file and env variable, adding direct connection P2P response handling)
         let endpoint_addr = network.router().endpoint().addr();
         let content = serde_json::to_string(&endpoint_addr)
             .context("Failed to serialize endpoint address")?;
@@ -270,7 +210,6 @@ async fn main() -> Result<()> {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-<<<<<<< HEAD
     info!("Registering inference protocol handler...");
     let inference_protocol = InferenceProtocol::new(inference_node_shared.clone());
     network
@@ -281,12 +220,10 @@ async fn main() -> Result<()> {
     info!("Protocol handler registered");
 
     // announce availability via gossip
-=======
-    // Announce availability via gossip
->>>>>>> 06e849bc (Bootstrapping from file and env variable, adding direct connection P2P response handling)
+    let model_name_for_broadcast = current_model_name.read().await.clone();
     let availability_msg = InferenceGossipMessage::NodeAvailable {
-        model_name: model_name.clone(),
-        checkpoint_id: None, // TODO: Track actual checkpoint when reloading - do we need this?
+        model_name: model_name_for_broadcast.clone(),
+        checkpoint_id: None,
         capabilities: capabilities.clone(),
     };
 
@@ -294,7 +231,11 @@ async fn main() -> Result<()> {
         .broadcast(&availability_msg)
         .context("Failed to broadcast availability")?;
 
-    info!("Broadcasted availability to network");
+    if let Some(ref model) = model_name_for_broadcast {
+        info!("Broadcasted availability to network (model: {})", model);
+    } else {
+        info!("Broadcasted idle status to network (no model loaded)");
+    }
     info!("Inference node ready! Listening for requests...");
 
     // heartbeat for re-announcing availability
@@ -314,16 +255,20 @@ async fn main() -> Result<()> {
             }
 
             _ = heartbeat_interval.tick() => {
-                info!("Re-broadcasting availability");
+                let model_name_for_broadcast = current_model_name.read().await.clone();
                 let availability_msg = InferenceGossipMessage::NodeAvailable {
-                    model_name: model_name.clone(),
+                    model_name: model_name_for_broadcast.clone(),
                     checkpoint_id: None,
                     capabilities: capabilities.clone(),
                 };
                 if let Err(e) = network.broadcast(&availability_msg) {
                     warn!("Failed to broadcast: {:#}", e);
                 } else {
-                    info!("Broadcast successful");
+                    if let Some(ref model) = model_name_for_broadcast {
+                        debug!("Re-broadcast successful (model: {})", model);
+                    } else {
+                        debug!("Re-broadcast successful (idle)");
+                    }
                 }
             }
 
@@ -334,16 +279,79 @@ async fn main() -> Result<()> {
 
                         match msg {
                             InferenceGossipMessage::NodeAvailable { model_name, checkpoint_id, capabilities } => {
-                                info!("Peer {} is available: model={}, checkpoint={:?}, caps={:?}",
+                                info!("Peer {} is available: model={:?}, checkpoint={:?}, caps={:?}",
                                       peer_id.fmt_short(), model_name, checkpoint_id, capabilities);
                             }
                             InferenceGossipMessage::NodeUnavailable => {
                                 info!("Peer {} is no longer available", peer_id.fmt_short());
                             }
+                            InferenceGossipMessage::LoadModel { model_name: requested_model, model_source } => {
+                                info!("Received LoadModel request from {}: model={}, source={:?}",
+                                      peer_id.fmt_short(), requested_model, model_source);
+
+                                let model_path = match model_source {
+                                    ModelSource::HuggingFace(ref name) => name.clone(),
+                                    ModelSource::Local(ref path) => path.clone(),
+                                };
+
+                                let current = current_model_name.read().await;
+                                if current.as_ref() == Some(&requested_model) {
+                                    info!("Model {} already loaded, skipping", requested_model);
+                                    drop(current);
+                                } else {
+                                    drop(current);
+                                    info!("Loading new model: {}", requested_model);
+
+                                    {
+                                        let mut node_guard = inference_node_shared.write().await;
+                                        if let Some(mut old_node) = node_guard.take() {
+                                            info!("Shutting down existing model");
+                                            if let Err(e) = old_node.shutdown() {
+                                                error!("Error shutting down old model: {:#}", e);
+                                            }
+                                        }
+                                    }
+
+                                    match (|| -> Result<()> {
+                                        let mut new_node = InferenceNode::new(
+                                            model_path.clone(),
+                                            Some(tensor_parallel_size),
+                                            Some(gpu_memory_utilization),
+                                        );
+
+                                        new_node.initialize(
+                                            Some(tensor_parallel_size),
+                                            Some(gpu_memory_utilization),
+                                        )?;
+
+                                        *inference_node_shared.write().await = Some(new_node);
+                                        *current_model_name.write().await = Some(requested_model.clone());
+                                        Ok(())
+                                    })() {
+                                        Ok(()) => {
+                                            info!("Successfully loaded model: {}", requested_model);
+
+                                            let availability_msg = InferenceGossipMessage::NodeAvailable {
+                                                model_name: Some(requested_model.clone()),
+                                                checkpoint_id: None,
+                                                capabilities: capabilities.clone(),
+                                            };
+                                            if let Err(e) = network.broadcast(&availability_msg) {
+                                                error!("Failed to broadcast availability after model load: {:#}", e);
+                                            } else {
+                                                info!("Broadcasted updated availability");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to load model {}: {:#}", requested_model, e);
+                                        }
+                                    }
+                                }
+                            }
                             InferenceGossipMessage::ReloadCheckpoint { checkpoint_id, checkpoint_source } => {
                                 info!("Received checkpoint reload request: {} from {}",
                                       checkpoint_id, checkpoint_source);
-                                // TODO: Implement checkpoint reloading - used for changing mdoels? need to figure this out
+                                // TODO: implement checkpoint reloading for RL training
                                 warn!("Checkpoint reloading not yet implemented");
                             }
                         }
