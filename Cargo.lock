@@ -2826,9 +2826,9 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "first-class-variants"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7403ce9c20bf83a00ece6eeaf8503721bc5d9c77ed6c9bbc36de80c694bd31c"
+checksum = "b06c71aec8b5c39ae2974435a3749578e518775b1fbbb6890d7172962331e8c8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7152,6 +7152,7 @@ name = "psyche-client"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "futures",
  "hex",
@@ -7164,6 +7165,7 @@ dependencies = [
  "psyche-core",
  "psyche-data-provider",
  "psyche-eval",
+ "psyche-event-sourcing",
  "psyche-metrics",
  "psyche-modeling",
  "psyche-network",
@@ -7575,9 +7577,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "backon",
+ "chrono",
  "futures-util",
  "psyche-coordinator",
  "psyche-core",
+ "psyche-event-sourcing",
  "psyche-solana-authorizer",
  "psyche-solana-coordinator",
  "psyche-solana-treasurer",

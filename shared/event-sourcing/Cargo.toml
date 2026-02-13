@@ -16,8 +16,8 @@ psyche-core.workspace = true
 
 parking_lot = "0.12"
 derive_more = { version = "2.1.1", features = ["from"] }
-first-class-variants = "1.0.1"
-tokio = { workspace = true, features = ["sync", "rt"] }
+first-class-variants = "1.1.0"
+tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

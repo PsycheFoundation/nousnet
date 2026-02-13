@@ -29,9 +29,10 @@ impl InMemoryBackend {
 
 impl Backend for InMemoryBackend {
     fn emit(&mut self, event: Event) {
-        if let EventData::RunStarted(ref context) = event.data {
+        if let EventData::RunStarted(context) = &event.data {
             self.run_context = Some(context.clone());
         }
+
         self.events.push(event);
     }
 
@@ -268,7 +269,7 @@ impl FileWriterState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::*;
+    use crate::{event, events::*};
     use crate::{p2p, train};
     use serial_test::serial;
     use std::fs;
@@ -293,25 +294,17 @@ mod tests {
     fn test_inmemory_backend_basic() {
         EventStore::init(vec![Box::new(InMemoryBackend::default())]);
 
-        EventStore::emit(
-            EventData::RunStarted(test_run_context()),
-            Utc::now(),
-            vec![],
-        );
+        event!(test_run_context());
 
-        EventStore::emit(
-            EventData::ResourceSnapshot(ResourceSnapshot {
-                gpu_mem_used_bytes: Some(1024),
-                gpu_utilization_percent: Some(75.5),
-                cpu_mem_used_bytes: 2048,
-                cpu_utilization_percent: 50.0,
-                network_bytes_sent_total: 1000,
-                network_bytes_recv_total: 2000,
-                disk_space_available_bytes: 10000,
-            }),
-            Utc::now(),
-            vec![],
-        );
+        event!(ResourceSnapshot {
+            gpu_mem_used_bytes: Some(1024),
+            gpu_utilization_percent: Some(75.5),
+            cpu_mem_used_bytes: 2048,
+            cpu_utilization_percent: 50.0,
+            network_bytes_sent_total: 1000,
+            network_bytes_recv_total: 2000,
+            disk_space_available_bytes: 10000,
+        });
 
         let count = EventStore::with_backend::<InMemoryBackend, _, _>(|b| b.events().len());
         assert_eq!(count, Some(2));
@@ -330,20 +323,22 @@ mod tests {
 
         use psyche_core::ClosedInterval;
 
-        EventStore::emit(
-            EventData::Train(train::TrainingStarted.into()),
-            Utc::now(),
-            vec![Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
+        event!(
+            train::TrainingStarted,
+            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
                 1, 1,
-            )))],
+            )))]
         );
 
-        EventStore::emit(
-            EventData::Train(train::TrainingFinished.into()),
-            Utc::now(),
-            vec![Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
+        event!(
+            train::TrainingFinished {
+                epoch: 0,
+                step: 1,
+                loss: Some(0.5),
+            },
+            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
                 1, 1,
-            )))],
+            )))]
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -368,23 +363,15 @@ mod tests {
             FileBackend::new(temp_dir.path(), 0, test_run_context()).unwrap(),
         )]);
 
-        EventStore::emit(
-            EventData::Train(train::TrainingStarted.into()),
-            Utc::now(),
-            vec![],
-        );
+        event!(train::TrainingStarted);
 
-        EventStore::emit(
-            EventData::EpochStarted(EpochStarted { epoch_number: 1 }),
-            Utc::now(),
-            vec![],
-        );
+        event!(EpochStarted { epoch_number: 1 });
 
-        EventStore::emit(
-            EventData::Train(train::TrainingFinished.into()),
-            Utc::now(),
-            vec![],
-        );
+        event!(train::TrainingFinished {
+            epoch: 1,
+            step: 10,
+            loss: None,
+        });
 
         std::thread::sleep(std::time::Duration::from_millis(200));
 
@@ -414,20 +401,22 @@ mod tests {
 
         use psyche_core::ClosedInterval;
 
-        EventStore::emit(
-            EventData::Train(train::TrainingStarted.into()),
-            Utc::now(),
-            vec![Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
+        event!(
+            train::TrainingStarted,
+            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
                 42, 42,
-            )))],
+            )))]
         );
 
-        EventStore::emit(
-            EventData::Train(train::TrainingFinished.into()),
-            Utc::now(),
-            vec![Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
+        event!(
+            train::TrainingFinished {
+                epoch: 0,
+                step: 42,
+                loss: Some(0.123),
+            },
+            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
                 42, 42,
-            )))],
+            )))]
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -464,20 +453,16 @@ mod tests {
     fn test_event_tags() {
         EventStore::init(vec![Box::new(InMemoryBackend::default())]);
 
-        EventStore::emit(
-            EventData::P2P(
-                p2p::BlobUploadStarted {
-                    to_endpoint_id: EndpointId(iroh::EndpointId::from_bytes(&[0u8; 32]).unwrap()),
-                    size_bytes: 1024,
-                    retry_number: 0,
-                }
-                .into(),
-            ),
-            Utc::now(),
-            vec![
+        event!(
+            p2p::BlobUploadStarted {
+                to_endpoint_id: EndpointId(iroh::EndpointId::from_bytes(&[0u8; 32]).unwrap()),
+                size_bytes: 1024,
+                retry_number: 0,
+            },
+            [
                 Tag::BlobUpload(123),
                 Tag::Blob(Hash(iroh_blobs::Hash::from_bytes([1u8; 32]))),
-            ],
+            ]
         );
 
         let tags = EventStore::with_backend::<InMemoryBackend, _, _>(|b| b.events()[0].tags.len());
@@ -489,11 +474,7 @@ mod tests {
     fn test_no_backends_initialized() {
         EventStore::init(vec![]);
 
-        EventStore::emit(
-            EventData::Train(train::TrainingStarted.into()),
-            Utc::now(),
-            vec![],
-        );
+        event!(train::TrainingStarted);
 
         let count = EventStore::with_backend::<InMemoryBackend, _, _>(|b| b.events().len());
         assert_eq!(count, None);
@@ -509,11 +490,7 @@ mod tests {
             FileBackend::new(temp_dir.path(), 0, test_run_context()).unwrap(),
         )]);
 
-        EventStore::emit(
-            EventData::Train(train::TrainingStarted.into()),
-            Utc::now(),
-            vec![],
-        );
+        event!(train::TrainingStarted);
 
         let count = EventStore::with_backend::<InMemoryBackend, _, _>(|b| b.events().len());
         assert_eq!(count, None);
