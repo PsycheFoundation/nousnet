@@ -5,10 +5,25 @@ use crate::{
 };
 use anyhow::anyhow;
 use anyhow::{Error, Result, bail};
+use chrono::Utc;
 use futures::future::join_all;
 use iroh::protocol::Router;
 use psyche_coordinator::{Commitment, CommitteeSelection, Coordinator, RunState};
-use psyche_core::{IntegrationTestLogMarker, NodeIdentity};
+use psyche_core::NodeIdentity;
+use psyche_event_sourcing::{client, event};
+
+fn to_event_run_state(state: RunState) -> psyche_event_sourcing::RunState {
+    match state {
+        RunState::Uninitialized => psyche_event_sourcing::RunState::Uninitialized,
+        RunState::WaitingForMembers => psyche_event_sourcing::RunState::WaitingForMembers,
+        RunState::Warmup => psyche_event_sourcing::RunState::Warmup,
+        RunState::RoundTrain => psyche_event_sourcing::RunState::RoundTrain,
+        RunState::RoundWitness => psyche_event_sourcing::RunState::RoundWitness,
+        RunState::Cooldown => psyche_event_sourcing::RunState::Cooldown,
+        RunState::Finished => psyche_event_sourcing::RunState::Finished,
+        RunState::Paused => psyche_event_sourcing::RunState::Paused,
+    }
+}
 use psyche_metrics::{ClientMetrics, ClientRoleInRound, ConnectionType, PeerConnection};
 use psyche_network::{
     AuthenticatableIdentity, BlobTicket, DownloadComplete, DownloadRetryInfo, DownloadType,
@@ -162,8 +177,13 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                 .unwrap_or_else(|| String::from(" - "));
 
                             if old_state.map(|s| s.run_state).unwrap_or_default() != new_state.run_state {
+                                event!(client::StateChanged {
+                                    old_state: to_event_run_state(old_state.map(|s| s.run_state).unwrap_or_default()),
+                                    new_state: to_event_run_state(new_state.run_state),
+                                    epoch: new_state.progress.epoch as u64,
+                                    step: new_state.progress.step as u64,
+                                });
                                 info!(
-                                    integration_test_log_marker = %IntegrationTestLogMarker::StateChange,
                                     client_id = %identity,
                                     old_state = old_run_state,
                                     new_state = %new_state.run_state,
