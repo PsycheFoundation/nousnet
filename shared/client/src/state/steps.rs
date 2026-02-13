@@ -5,7 +5,8 @@ use crate::{
 
 use iroh_blobs::api::Tag;
 use psyche_coordinator::{Committee, Coordinator, RunState, Witness, WitnessProof};
-use psyche_core::{IntegrationTestLogMarker, MerkleRoot, MerkleTree, NodeIdentity, sha256};
+use psyche_core::{MerkleRoot, MerkleTree, NodeIdentity, sha256};
+use psyche_event_sourcing::event;
 use psyche_modeling::{DistroResult, Trainer};
 use psyche_network::{
     AuthenticatableIdentity, BlobTicket, Hash, P2PEndpointInfo, TransmittableDistroResult,
@@ -795,8 +796,12 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> StepStateMachine<T, 
                     .lock()
                     .map_err(|_| StepError::StatsLoggerMutex)?
                     .push_round_stats(&round_losses, round_duration, step_duration, optim_stats);
+                event!(train::TrainingFinished {
+                    epoch: state.progress.epoch as u64,
+                    step: state.progress.step as u64,
+                    loss: loss.map(|l| l as f64),
+                });
                 info!(
-                    integration_test_log_marker = %IntegrationTestLogMarker::Loss,
                     client_id = %self.identity,
                     epoch = state.progress.epoch,
                     step = state.progress.step,

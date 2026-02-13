@@ -1,0 +1,154 @@
+use indexmap::IndexMap;
+use psyche_event_sourcing::projection::{ClusterSnapshot, WarmupPhase};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Modifier, Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, Paragraph, Widget},
+};
+
+use crate::app::NodeFileStats;
+use crate::utils::{fmt_bps, fmt_bytes};
+
+pub struct NodeWidget<'a> {
+    pub snapshot: &'a ClusterSnapshot,
+    /// None = no node selected (show placeholder).
+    pub selected_node_idx: Option<usize>,
+    pub file_stats: &'a IndexMap<String, NodeFileStats>,
+}
+
+impl<'a> Widget for NodeWidget<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let node_entry = self
+            .selected_node_idx
+            .and_then(|i| self.snapshot.nodes.get_index(i));
+
+        let block = Block::default().borders(Borders::ALL);
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let Some((id, node)) = node_entry else {
+            let msg = if self.selected_node_idx.is_none() {
+                "Use ↑/↓ to select a node"
+            } else {
+                "No nodes"
+            };
+            Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
+                .centered()
+                .render(area, buf);
+            return;
+        };
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        lines.push(Line::from(vec![
+            "Node ID: ".bold(),
+            Span::from(format!("{}…{}", &id[..10], &id[id.len() - 8..])),
+        ]));
+
+        // Run state
+        lines.push(Line::from(vec![
+            Span::styled("Run State: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(
+                node.run_state
+                    .map(|s| format!("{:?}", s))
+                    .unwrap_or_else(|| "—".to_string()),
+            ),
+        ]));
+
+        // Warmup phase
+        let warmup = &node.warmup;
+        let phase_str = format!("{}", warmup.phase);
+        lines.push(Line::from(vec![
+            Span::styled("Warmup: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(phase_str),
+        ]));
+
+        // Download progress bar (if downloading)
+        if warmup.phase == WarmupPhase::Downloading {
+            let (ratio, label) = if let Some(total) = warmup.download_total_bytes {
+                if total > 0 {
+                    let r = (warmup.download_bytes as f64 / total as f64).clamp(0.0, 1.0);
+                    (r, format!("{}/{} bytes", warmup.download_bytes, total))
+                } else {
+                    (0.0, "0 bytes".to_string())
+                }
+            } else {
+                (0.0, format!("{} bytes", warmup.download_bytes))
+            };
+
+            let gauge_row = inner.y + lines.len() as u16;
+            if gauge_row < inner.y + inner.height {
+                let gauge_area = Rect {
+                    x: inner.x,
+                    y: gauge_row,
+                    width: inner.width,
+                    height: 1,
+                };
+                Gauge::default()
+                    .gauge_style(Style::default().fg(Color::Cyan))
+                    .ratio(ratio)
+                    .label(label)
+                    .render(gauge_area, buf);
+                lines.push(Line::from("")); // placeholder to advance line count
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        // Network throughput
+        if node.network_tx_bps.is_some() || node.network_rx_bps.is_some() {
+            lines.push(Line::from(vec![
+                Span::styled("Network: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("↑ {}", fmt_bps(node.network_tx_bps.unwrap_or(0.0))),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("↓ {}", fmt_bps(node.network_rx_bps.unwrap_or(0.0))),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+
+        // Events file size + lifetime write rate
+        if let Some(stats) = self.file_stats.get(&node.node_id) {
+            lines.push(Line::from(vec![
+                Span::styled("Events: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(fmt_bytes(stats.total_bytes)),
+                Span::raw("  "),
+                Span::styled(
+                    fmt_bps(stats.bytes_per_sec),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+
+        // Health check failures
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Health failures: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!("{}", node.health_check_steps.len())),
+        ]));
+
+        // Last error
+        if let Some((kind, msg)) = &node.last_error {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "Last error: ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!("{:?}: {}", kind, msg)),
+            ]));
+        }
+
+        Paragraph::new(lines).render(inner, buf);
+    }
+}

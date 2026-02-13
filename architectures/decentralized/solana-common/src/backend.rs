@@ -21,7 +21,7 @@ use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use psyche_coordinator::model::{self, Checkpoint};
 use psyche_coordinator::{CommitteeProof, Coordinator, HealthChecks};
-use psyche_core::IntegrationTestLogMarker;
+use psyche_event_sourcing::event;
 use psyche_watcher::{Backend as WatcherBackend, OpportunisticData};
 use solana_account_decoder_client_types::{UiAccount, UiAccountEncoding};
 use solana_transaction_status_client_types::UiTransactionEncoding;
@@ -64,8 +64,11 @@ async fn subscribe_to_account(
         tokio::time::sleep(Duration::from_secs(sleep_time)).await;
         retries += 1;
         let Ok(sub_client) = PubsubClient::new(&url).await else {
+            event!(coordinator::SolanaSubscriptionChanged {
+                url: url.to_string(),
+                status: SubscriptionStatus::Down,
+            });
             warn!(
-                integration_test_log_marker = %IntegrationTestLogMarker::SolanaSubscription,
                 url = url,
                 subscription_number = id,
                 "Solana subscription error, could not connect to url: {url}",
@@ -96,8 +99,11 @@ async fn subscribe_to_account(
             }
         };
 
+        event!(coordinator::SolanaSubscriptionChanged {
+            url: url.to_string(),
+            status: SubscriptionStatus::Up,
+        });
         info!(
-            integration_test_log_marker = %IntegrationTestLogMarker::SolanaSubscription,
             url = url,
             subscription_number = id,
             "Correctly subscribe to Solana url: {url}",
@@ -115,8 +121,11 @@ async fn subscribe_to_account(
                                 }
                         }
                         None => {
+                            event!(coordinator::SolanaSubscriptionChanged {
+                                url: url.to_string(),
+                                status: SubscriptionStatus::Down,
+                            });
                             warn!(
-                                integration_test_log_marker = %IntegrationTestLogMarker::SolanaSubscription,
                                 url = url,
                                 subscription_number = id,
                                 "Solana subscription error, websocket closed");

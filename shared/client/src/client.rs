@@ -6,7 +6,9 @@ use crate::{
 use anyhow::anyhow;
 use anyhow::{Error, Result, bail};
 use psyche_coordinator::{Commitment, CommitteeSelection, Coordinator, RunState};
-use psyche_core::{IntegrationTestLogMarker, NodeIdentity};
+use psyche_core::NodeIdentity;
+use psyche_event_sourcing::event;
+
 use psyche_metrics::{ClientMetrics, ClientRoleInRound, PeerConnection};
 use psyche_network::{
     AuthenticatableIdentity, DownloadComplete, DownloadSchedulerHandle, DownloadType, EndpointId,
@@ -21,6 +23,7 @@ use iroh_blobs::api::Tag;
 use rand::{Rng, RngCore, seq::SliceRandom};
 use std::{
     collections::BTreeSet,
+    hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -157,16 +160,36 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                         },
 
                         state = watcher.poll_next() => {
-                            let (old_state, new_state) = state?;
-                            let old_run_state = old_state
-                                .map(|s| s.run_state.to_string())
+                            let (old_state, (new_state, new_state_hash)) = state?;
+                            if let Some((_, old_state_hash)) = old_state.as_ref() {
+                                if old_state_hash == new_state_hash {
+                                    continue;
+                                }
+                            }
+                            {
+                                let mut hasher = DefaultHasher::new();
+                                new_state_hash.hash(&mut hasher);
+                                let new_state_hash = hasher.finish().to_string();
+                                event!(coordinator::CoordinatorStateChanged { new_state_hash });
+                            }
+
+                            let old_run_state = old_state.as_ref()
+                                .map(|s| s.0.run_state).unwrap_or_default();
+
+                            let old_run_state_str = old_state.as_ref()
+                                .map(|s| s.0.run_state.to_string())
                                 .unwrap_or_else(|| String::from(" - "));
 
-                            if old_state.map(|s| s.run_state).unwrap_or_default() != new_state.run_state {
+                            if old_run_state != new_state.run_state {
+                                event!(client::StateChanged {
+                                    old_state: old_run_state,
+                                    new_state: new_state.run_state,
+                                    epoch: new_state.progress.epoch as u64,
+                                    step: new_state.progress.step as u64,
+                                });
                                 info!(
-                                    integration_test_log_marker = %IntegrationTestLogMarker::StateChange,
                                     client_id = %identity,
-                                    old_state = old_run_state,
+                                    old_state = old_run_state_str,
                                     new_state = %new_state.run_state,
                                     epoch = new_state.progress.epoch,
                                     step = new_state.progress.step,
@@ -182,7 +205,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                             allowlist.set(run_participating_endpoint_ids);
                             ensure_gossip_connected(new_state, &mut p2p, &mut last_gossip_connection_time);
 
-                            if old_state.map(|s| s.run_state) != Some(new_state.run_state) && new_state.run_state == RunState::RoundTrain {
+                            if old_state.map(|s| s.0.run_state) != Some(new_state.run_state) && new_state.run_state == RunState::RoundTrain {
                                 trace!("Updating p2p");
                                 let last_needed_step_blobs = new_state.progress.step.saturating_sub(2);
                                 if let Err(err) = p2p.remove_staled_tags(last_needed_step_blobs).await {

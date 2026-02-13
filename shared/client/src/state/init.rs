@@ -3,15 +3,14 @@ use psyche_coordinator::{
     Coordinator, HealthChecks,
     model::{self, HttpLLMTrainingDataLocation, LLMTrainingDataLocation},
 };
-use psyche_core::{
-    Barrier, CancellableBarrier, IntegrationTestLogMarker, NodeIdentity, Shuffle, TokenSize,
-};
+use psyche_core::{Barrier, CancellableBarrier, NodeIdentity, Shuffle, TokenSize};
 use psyche_data_provider::{
     DataProvider, DataProviderTcpClient, DownloadError, DummyDataProvider,
     PreprocessedDataProvider, Split, WeightedDataProvider, download_dataset_repo_async,
     download_model_from_gcs_async, download_model_repo_async,
     http::{FileURLs, HttpDataProvider},
 };
+use psyche_event_sourcing::event;
 use psyche_metrics::ClientMetrics;
 use psyche_modeling::{
     AttentionImplementation, AutoConfig, AutoTokenizerError, CausalLM, CommunicatorId,
@@ -641,8 +640,8 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> RunInitConfigAndIO<T
                             .send((serialized_config.clone(), serialized_tokenizer))
                             .unwrap();
 
+                        event!(warmup::ModelLoadComplete);
                         info!(
-                            integration_test_log_marker = %IntegrationTestLogMarker::LoadedModel,
                             checkpoint = %llm.checkpoint,
                             gpus = init_config.data_parallelism * init_config.tensor_parallelism,
                             dp = init_config.data_parallelism,

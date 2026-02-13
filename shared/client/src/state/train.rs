@@ -8,7 +8,8 @@ use psyche_coordinator::{
     BLOOM_FALSE_RATE, Commitment, CommitteeSelection, Coordinator, CoordinatorError, HealthChecks,
     assign_data_for_state, get_batch_ids_for_node, get_batch_ids_for_round, model,
 };
-use psyche_core::{BatchId, Bloom, IntegrationTestLogMarker, NodeIdentity, OptimizerDefinition};
+use psyche_core::{BatchId, Bloom, NodeIdentity, OptimizerDefinition};
+use psyche_event_sourcing::event;
 use psyche_modeling::{
     ApplyDistroResultError, Batch, BatchData, DistroResult, TrainOutput, Trainer,
     TrainerThreadCommunicationError,
@@ -231,8 +232,15 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
         let zero_optim = warmup_lr_between.is_some_and(|_| round.height == 0);
         let epoch = state.progress.epoch;
 
+        event!(train::WitnessElected {
+            step: state.progress.step as u64,
+            round: round.height as u64,
+            epoch: epoch as u64,
+            index: client_index,
+            committee_position: committee_proof.position,
+        });
+
         info!(
-            integration_test_log_marker = %IntegrationTestLogMarker::WitnessElected,
             step = state.progress.step,
             round = round.height,
             epoch = epoch,
@@ -548,8 +556,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                         Some(x) => x,
                         None => {
                             let expected_trainer = data_assignments.get(&batch_id);
+                            event!(train::UntrainedBatchWarning {
+                                batch_id,
+                                expected_trainer: expected_trainer.map(|t| format!("{:?}", t)),
+                            });
                             warn!(
-                                integration_test_log_marker = %IntegrationTestLogMarker::UntrainedBatches,
                                 batch_id = %batch_id,
                                 expected_trainer = ?expected_trainer,
                                 "No commitments for batch {batch_id}, assigned to node {expected_trainer:?}",
@@ -666,8 +677,11 @@ fn start_sending_health_checks<T: NodeIdentity>(
                 for (index, client) in clients.iter().enumerate() {
                     let proof = committee_selection.get_committee(index as u64);
                     if !state.healthy(&client.id, &proof).unwrap_or(false) {
+                        event!(client::HealthCheckFailed {
+                            index: index as u64,
+                            current_step: state.epoch_state.rounds_head as u64,
+                        });
                         warn!(
-                            integration_test_log_marker = %IntegrationTestLogMarker::HealthCheck,
                             index = index,
                             client_id = %&client.id,
                             current_step = state.epoch_state.rounds_head,
