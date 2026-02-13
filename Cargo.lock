@@ -2825,6 +2825,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
+name = "first-class-variants"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7403ce9c20bf83a00ece6eeaf8503721bc5d9c77ed6c9bbc36de80c694bd31c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "five8_const"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4647,7 +4658,7 @@ dependencies = [
  "pin-project-lite",
  "rustc-hash",
  "rustls 0.23.36",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -4690,7 +4701,7 @@ checksum = "a91fe9ec3db6615d7ab1b303717f3b98fc40b96955a4ea25b113b1b879f7481f"
 dependencies = [
  "cfg_aliases",
  "libc",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -4703,7 +4714,7 @@ checksum = "f981dadd5a072a9e0efcd24bdcc388e570073f7e51b33505ceb1ef4668c80c86"
 dependencies = [
  "cfg_aliases",
  "libc",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -7303,6 +7314,25 @@ dependencies = [
  "tokenizers",
  "tokio-util 0.7.18",
  "torch-sys",
+ "tracing",
+]
+
+[[package]]
+name = "psyche-event-sourcing"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "derive_more",
+ "first-class-variants",
+ "iroh",
+ "iroh-blobs",
+ "parking_lot",
+ "postcard",
+ "psyche-core",
+ "serde",
+ "serial_test",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 
