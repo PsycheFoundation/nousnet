@@ -12,7 +12,9 @@ use bollard::container::StartContainerOptions;
 use bollard::{Docker, container::KillContainerOptions};
 use psyche_coordinator::{RunState, model::Checkpoint};
 use psyche_core::IntegrationTestLogMarker;
-use psyche_decentralized_testing::docker_setup::e2e_testing_setup_subscription;
+use psyche_decentralized_testing::docker_setup::{
+    e2e_testing_setup_rpc_fallback, e2e_testing_setup_subscription,
+};
 use psyche_decentralized_testing::{
     CLIENT_CONTAINER_PREFIX, NGINX_PROXY_PREFIX,
     chaos::{ChaosAction, ChaosScheduler},
@@ -1126,4 +1128,113 @@ async fn test_pause_and_resume_run() {
             _ => {}
         }
     }
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[serial]
+async fn test_rpc_fallback() {
+    // epochs the test will run
+    let num_of_epochs_to_run = 3;
+
+    // Initialize DockerWatcher
+    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
+    let mut watcher = DockerWatcher::new(docker.clone());
+
+    // Initialize a Solana run with 2 clients using RPC fallback proxies
+    let _cleanup = e2e_testing_setup_rpc_fallback(docker.clone(), 2).await;
+
+    // Monitor client 1 for state changes (to track training progress and trigger proxy stops)
+    let _monitor_client_1 = watcher
+        .monitor_container(
+            &format!("{CLIENT_CONTAINER_PREFIX}-1"),
+            vec![IntegrationTestLogMarker::StateChange],
+        )
+        .unwrap();
+
+    // Monitor client 2 for RPC fallback events
+    let _monitor_client_2 = watcher
+        .monitor_container(
+            &format!("{CLIENT_CONTAINER_PREFIX}-2"),
+            vec![IntegrationTestLogMarker::RpcFallback],
+        )
+        .unwrap();
+
+    let mut live_interval = time::interval(Duration::from_secs(10));
+    let mut rpc_fallback_events: Vec<String> = Vec::new();
+
+    loop {
+        tokio::select! {
+            _ = live_interval.tick() => {
+                if let Err(e) = watcher.monitor_clients_health(2).await {
+                    panic!("{}", e);
+                }
+            }
+            response = watcher.log_rx.recv() => {
+                match response {
+                    Some(Response::StateChange(_timestamp, _client_id, old_state, new_state, epoch, step)) => {
+                        if old_state == RunState::WaitingForMembers.to_string() {
+                            println!("Starting epoch: {epoch}");
+                        }
+
+                        // Stop primary RPC proxy at step 5
+                        if step == 5 && new_state == RunState::RoundWitness.to_string() {
+                            println!("stop container {NGINX_PROXY_PREFIX}-1 (primary RPC)");
+                            docker
+                                .stop_container(&format!("{NGINX_PROXY_PREFIX}-1"), None)
+                                .await
+                                .unwrap();
+                        }
+
+                        // Resume primary RPC proxy at step 15
+                        if step == 15 && new_state == RunState::RoundWitness.to_string() {
+                            println!("resume container {NGINX_PROXY_PREFIX}-1");
+                            docker
+                                .start_container(&format!("{NGINX_PROXY_PREFIX}-1"), None::<StartContainerOptions<String>>)
+                                .await
+                                .unwrap();
+                        }
+
+                        // Stop backup RPC proxy at step 25
+                        if step == 25 && new_state == RunState::RoundWitness.to_string() {
+                            println!("stop container {NGINX_PROXY_PREFIX}-2 (backup RPC)");
+                            docker
+                                .stop_container(&format!("{NGINX_PROXY_PREFIX}-2"), None)
+                                .await
+                                .unwrap();
+                        }
+
+                        // Resume backup RPC proxy at step 30
+                        if step == 30 && new_state == RunState::RoundWitness.to_string() {
+                            println!("resume container {NGINX_PROXY_PREFIX}-2");
+                            docker
+                                .start_container(&format!("{NGINX_PROXY_PREFIX}-2"), None::<StartContainerOptions<String>>)
+                                .await
+                                .unwrap();
+                        }
+
+                        // Finish test after target epochs
+                        if epoch == num_of_epochs_to_run {
+                            break;
+                        }
+                    },
+                    Some(Response::RpcFallback(failed_rpc_index, error)) => {
+                        println!("RPC fallback: failed_rpc_index={failed_rpc_index}, error={error}");
+                        rpc_fallback_events.push(failed_rpc_index);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    println!("rpc_fallback_events: {rpc_fallback_events:?}");
+    assert!(
+        !rpc_fallback_events.is_empty(),
+        "Expected at least one RPC fallback event, but none were received"
+    );
+    // Verify that a fallback from RPC 0 (primary) was observed
+    assert!(
+        rpc_fallback_events.iter().any(|idx| idx == "0"),
+        "Expected a fallback from primary RPC (index 0), events: {rpc_fallback_events:?}"
+    );
 }
