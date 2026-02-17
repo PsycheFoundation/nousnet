@@ -1160,7 +1160,8 @@ async fn test_rpc_fallback() {
         .unwrap();
 
     let mut live_interval = time::interval(Duration::from_secs(10));
-    let mut rpc_fallback_events: Vec<String> = Vec::new();
+    let mut rpc_fallback_count: u32 = 0;
+    let mut seen_fallback_from_primary = false;
 
     loop {
         tokio::select! {
@@ -1185,8 +1186,8 @@ async fn test_rpc_fallback() {
                                 .unwrap();
                         }
 
-                        // Resume primary RPC proxy at step 15
-                        if step == 15 && new_state == RunState::RoundWitness.to_string() {
+                        // Resume primary RPC proxy at step 8
+                        if step == 8 && new_state == RunState::RoundWitness.to_string() {
                             println!("resume container {NGINX_PROXY_PREFIX}-1");
                             docker
                                 .start_container(&format!("{NGINX_PROXY_PREFIX}-1"), None::<StartContainerOptions<String>>)
@@ -1194,8 +1195,8 @@ async fn test_rpc_fallback() {
                                 .unwrap();
                         }
 
-                        // Stop backup RPC proxy at step 25
-                        if step == 25 && new_state == RunState::RoundWitness.to_string() {
+                        // Stop backup RPC proxy at step 15
+                        if step == 15 && new_state == RunState::RoundWitness.to_string() {
                             println!("stop container {NGINX_PROXY_PREFIX}-2 (backup RPC)");
                             docker
                                 .stop_container(&format!("{NGINX_PROXY_PREFIX}-2"), None)
@@ -1203,8 +1204,8 @@ async fn test_rpc_fallback() {
                                 .unwrap();
                         }
 
-                        // Resume backup RPC proxy at step 30
-                        if step == 30 && new_state == RunState::RoundWitness.to_string() {
+                        // Resume backup RPC proxy at step 18
+                        if step == 18 && new_state == RunState::RoundWitness.to_string() {
                             println!("resume container {NGINX_PROXY_PREFIX}-2");
                             docker
                                 .start_container(&format!("{NGINX_PROXY_PREFIX}-2"), None::<StartContainerOptions<String>>)
@@ -1217,9 +1218,16 @@ async fn test_rpc_fallback() {
                             break;
                         }
                     },
-                    Some(Response::RpcFallback(failed_rpc_index, error)) => {
-                        println!("RPC fallback: failed_rpc_index={failed_rpc_index}, error={error}");
-                        rpc_fallback_events.push(failed_rpc_index);
+                    Some(Response::RpcFallback(failed_rpc_index, _error)) => {
+                        rpc_fallback_count += 1;
+                        if failed_rpc_index == "0" {
+                            if !seen_fallback_from_primary {
+                                println!("RPC fallback from primary (index 0) detected");
+                                seen_fallback_from_primary = true;
+                            }
+                        } else {
+                            println!("RPC fallback: failed_rpc_index={failed_rpc_index}");
+                        }
                     }
                     _ => unreachable!(),
                 }
@@ -1227,14 +1235,13 @@ async fn test_rpc_fallback() {
         }
     }
 
-    println!("rpc_fallback_events: {rpc_fallback_events:?}");
+    println!("Total RPC fallback events: {rpc_fallback_count}");
     assert!(
-        !rpc_fallback_events.is_empty(),
+        rpc_fallback_count > 0,
         "Expected at least one RPC fallback event, but none were received"
     );
-    // Verify that a fallback from RPC 0 (primary) was observed
     assert!(
-        rpc_fallback_events.iter().any(|idx| idx == "0"),
-        "Expected a fallback from primary RPC (index 0), events: {rpc_fallback_events:?}"
+        seen_fallback_from_primary,
+        "Expected a fallback from primary RPC (index 0)"
     );
 }
