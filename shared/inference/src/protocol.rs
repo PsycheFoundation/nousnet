@@ -244,27 +244,9 @@ mod tests {
 
     #[test]
     fn test_model_source_variants() {
-        let hf = ModelSource::HuggingFace("meta-llama/Llama-2-7b".to_string()); // make hermes
+        let hf = ModelSource::HuggingFace("NousResearch/Hermes-4-14B".to_string());
         let bytes = postcard::to_stdvec(&hf).unwrap();
         let parsed: ModelSource = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(parsed, hf);
-
-        // local
-        // let local = ModelSource::Local("/path/to/model".to_string());
-        // let bytes = postcard::to_stdvec(&local).unwrap();
-        // let parsed: ModelSource = postcard::from_bytes(&bytes).unwrap();
-        // assert_eq!(parsed, local);
-
-        // // s3 - should be GCP
-        // let s3 = ModelSource::S3("s3://bucket/model".to_string());
-        // let bytes = postcard::to_stdvec(&s3).unwrap();
-        // let parsed: ModelSource = postcard::from_bytes(&bytes).unwrap();
-        // assert_eq!(parsed, s3);
-
-        // // iroh blob - TBD on how to test
-        // let iroh = ModelSource::IrohBlob("bafyreib...".to_string());
-        // let bytes = postcard::to_stdvec(&iroh).unwrap();
-        // let parsed: ModelSource = postcard::from_bytes(&bytes).unwrap();
-        // assert_eq!(parsed, iroh);
     }
 }

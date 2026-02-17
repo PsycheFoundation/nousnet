@@ -98,23 +98,22 @@ fn default_temperature() -> Option<f64> {
 fn default_top_p() -> Option<f64> {
     Some(1.0)
 }
+
+#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+enum ModelSourceType {
+    #[default]
+    HuggingFace,
+    Local,
+}
+
 #[derive(serde::Deserialize)]
 struct LoadModelRequest {
     model_name: String,
-    #[serde(default = "default_model_source_type")]
-    source_type: String, // "huggingface" or "local"
+    #[serde(default)]
+    source_type: ModelSourceType,
     #[serde(default)]
     source_path: Option<String>,
-}
-
-fn default_model_source_type() -> String {
-    "huggingface".to_string()
-}
-
-#[derive(serde::Serialize)]
-struct LoadModelResponse {
-    success: bool,
-    message: String,
 }
 
 #[derive(serde::Serialize)]
@@ -163,7 +162,7 @@ async fn handle_inference(
     info!(
         "Routing request to node: {} (model: {})",
         target_peer_id.fmt_short(),
-        node.model_name.as_ref().unwrap_or(&"unknown".to_string())
+        node.model_name.as_deref().unwrap_or("unknown")
     );
     drop(nodes);
 
@@ -235,37 +234,24 @@ async fn handle_inference(
 async fn handle_load_model(
     State(state): State<Arc<GatewayState>>,
     Json(req): Json<LoadModelRequest>,
-) -> Json<LoadModelResponse> {
+) -> Result<String, AppError> {
     use psyche_inference::ModelSource;
 
     info!(
-        "Admin API: Received LoadModel request for model: {} (source: {})",
+        "Admin API: Received LoadModel request for model: {} (source: {:?})",
         req.model_name, req.source_type
     );
 
-    let model_source = match req.source_type.as_str() {
-        "huggingface" => {
+    let model_source = match req.source_type {
+        ModelSourceType::HuggingFace => {
             let path = req.source_path.unwrap_or_else(|| req.model_name.clone());
             ModelSource::HuggingFace(path)
         }
-        "local" => {
-            if let Some(path) = req.source_path {
-                ModelSource::Local(path)
-            } else {
-                return Json(LoadModelResponse {
-                    success: false,
-                    message: "source_path is required for local models".to_string(),
-                });
-            }
-        }
-        _ => {
-            return Json(LoadModelResponse {
-                success: false,
-                message: format!(
-                    "Invalid source_type: {}. Must be 'huggingface' or 'local'",
-                    req.source_type
-                ),
-            });
+        ModelSourceType::Local => {
+            let path = req.source_path.ok_or_else(|| {
+                AppError::BadRequest("source_path is required for local models".to_string())
+            })?;
+            ModelSource::Local(path)
         }
     };
 
@@ -274,25 +260,19 @@ async fn handle_load_model(
         model_source,
     };
 
-    match state.gossip_tx.send(load_msg).await {
-        Ok(()) => {
-            info!(
-                "Successfully broadcasted LoadModel message for: {}",
-                req.model_name
-            );
-            Json(LoadModelResponse {
-                success: true,
-                message: format!("LoadModel broadcast sent for model: {}", req.model_name),
-            })
-        }
-        Err(e) => {
-            error!("Failed to broadcast LoadModel message: {:#}", e);
-            Json(LoadModelResponse {
-                success: false,
-                message: format!("Failed to broadcast: {}", e),
-            })
-        }
-    }
+    state.gossip_tx.send(load_msg).await.map_err(|e| {
+        error!("Failed to broadcast LoadModel message: {:#}", e);
+        AppError::InternalError
+    })?;
+
+    info!(
+        "Successfully broadcasted LoadModel message for: {}",
+        req.model_name
+    );
+    Ok(format!(
+        "LoadModel broadcast sent for model: {}",
+        req.model_name
+    ))
 }
 
 #[derive(Debug)]
@@ -300,6 +280,7 @@ enum AppError {
     NoNodesAvailable,
     Timeout,
     InternalError,
+    BadRequest(String),
 }
 
 impl IntoResponse for AppError {
@@ -307,10 +288,17 @@ impl IntoResponse for AppError {
         let (status, message) = match self {
             AppError::NoNodesAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "No inference nodes available",
+                "No inference nodes available".to_string(),
             ),
-            AppError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "Inference request timed out"),
-            AppError::InternalError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            AppError::Timeout => (
+                StatusCode::GATEWAY_TIMEOUT,
+                "Inference request timed out".to_string(),
+            ),
+            AppError::InternalError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
         };
         (status, message).into_response()
     }
