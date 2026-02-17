@@ -98,11 +98,20 @@ fn default_temperature() -> Option<f64> {
 fn default_top_p() -> Option<f64> {
     Some(1.0)
 }
+
+#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+enum ModelSourceType {
+    #[default]
+    HuggingFace,
+    Local,
+}
+
 #[derive(serde::Deserialize)]
 struct LoadModelRequest {
     model_name: String,
-    #[serde(default = "default_model_source_type")]
-    source_type: String, // "huggingface" or "local"
+    #[serde(default)]
+    source_type: ModelSourceType,
     #[serde(default)]
     source_path: Option<String>,
 }
@@ -180,7 +189,7 @@ async fn handle_inference(
     info!(
         "Routing request to node: {} (model: {})",
         target_peer_id.fmt_short(),
-        node.model_name.as_ref().unwrap_or(&"unknown".to_string())
+        node.model_name.as_deref().unwrap_or("unknown")
     );
     drop(nodes);
 
@@ -257,15 +266,20 @@ async fn handle_load_model(
 
     info!(
         "Admin API: Received LoadModel request for model: {} (source: {:?})",
-        req.model_name, req.source
+        req.model_name, req.source_type
     );
 
-    let model_source = match req.source {
-        LoadModelSource::HuggingFace { source_path } => {
-            let path = source_path.unwrap_or_else(|| req.model_name.clone());
+    let model_source = match req.source_type {
+        ModelSourceType::HuggingFace => {
+            let path = req.source_path.unwrap_or_else(|| req.model_name.clone());
             ModelSource::HuggingFace(path)
         }
-        LoadModelSource::Local { source_path } => ModelSource::Local(source_path),
+        ModelSourceType::Local => {
+            let path = req.source_path.ok_or_else(|| {
+                AppError::BadRequest("source_path is required for local models".to_string())
+            })?;
+            ModelSource::Local(path)
+        }
     };
 
     let load_msg = InferenceGossipMessage::LoadModel {
@@ -293,6 +307,7 @@ enum AppError {
     NoNodesAvailable,
     Timeout,
     InternalError,
+    BadRequest(String),
 }
 
 impl IntoResponse for AppError {
@@ -310,6 +325,7 @@ impl IntoResponse for AppError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal server error".to_string(),
             ),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
         };
         (status, message).into_response()
     }
