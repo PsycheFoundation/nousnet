@@ -284,63 +284,66 @@ async fn main() -> Result<()> {
                                     ModelSource::Local(ref path) => path.clone(),
                                 };
 
-                                let current = current_model_name.read().await;
-                                if current.as_ref() == Some(&requested_model) {
+                                let model_already_loaded = {
+                                    let current = current_model_name.read().await;
+                                    current.as_ref() == Some(&requested_model)
+                                };
+                                if model_already_loaded {
                                     info!("Model {} already loaded, skipping", requested_model);
-                                    drop(current);
                                 } else {
-                                    drop(current);
-                                    info!("Loading new model: {}", requested_model);
+                                    info!("Loading new model: {} (background task)", requested_model);
 
-                                    {
-                                        let mut node_guard = inference_node_shared.write().await;
-                                        if let Some(mut old_node) = node_guard.take() {
+                                    // Spawn background task to avoid blocking the event loop
+                                    // Model loading can take 10-60+ seconds, so we don't want to block heartbeats
+                                    let inference_node_shared_clone = inference_node_shared.clone();
+                                    let current_model_name_clone = current_model_name.clone();
+                                    let requested_model_clone = requested_model.clone();
+
+                                    tokio::spawn(async move {
+                                        // Shutdown old model if exists
+                                        let old_node = inference_node_shared_clone.write().await.take();
+                                        if let Some(mut old_node) = old_node {
                                             info!("Shutting down existing model");
                                             if let Err(e) = old_node.shutdown() {
                                                 error!("Error shutting down old model: {:#}", e);
                                             }
                                             // Give vLLM time to release GPU memory before loading new model
                                             // This prevents OOM when switching between large models
-                                            drop(node_guard);
                                             info!("Waiting 5s for GPU memory to be released...");
                                             tokio::time::sleep(Duration::from_secs(5)).await;
                                         }
-                                    }
 
-                                    match async {
-                                        let mut new_node = InferenceNode::new(
-                                            model_path.clone(),
-                                            Some(tensor_parallel_size),
-                                            Some(gpu_memory_utilization),
-                                        );
+                                        // Load new model (blocking operation)
+                                        let load_result = (|| -> Result<InferenceNode> {
+                                            let mut new_node = InferenceNode::new(
+                                                model_path.clone(),
+                                                Some(tensor_parallel_size),
+                                                Some(gpu_memory_utilization),
+                                            );
 
-                                        new_node.initialize(
-                                            Some(tensor_parallel_size),
-                                            Some(gpu_memory_utilization),
-                                        )?;
+                                            new_node.initialize(
+                                                Some(tensor_parallel_size),
+                                                Some(gpu_memory_utilization),
+                                            )?;
 
-                                        *inference_node_shared.write().await = Some(new_node);
-                                        *current_model_name.write().await = Some(requested_model.clone());
-                                        Ok::<(), anyhow::Error>(())
-                                    }.await {
-                                        Ok(()) => {
-                                            info!("Successfully loaded model: {}", requested_model);
+                                            Ok(new_node)
+                                        })();
 
-                                            let availability_msg = InferenceGossipMessage::NodeAvailable {
-                                                model_name: Some(requested_model.clone()),
-                                                checkpoint_id: None,
-                                                capabilities: capabilities.clone(),
-                                            };
-                                            if let Err(e) = network.broadcast(&availability_msg) {
-                                                error!("Failed to broadcast availability after model load: {:#}", e);
-                                            } else {
-                                                info!("Broadcasted updated availability");
+                                        match load_result {
+                                            Ok(new_node) => {
+                                                // update model name first, then node, to maintain consistency
+                                                *current_model_name_clone.write().await = Some(requested_model_clone.clone());
+                                                *inference_node_shared_clone.write().await = Some(new_node);
+
+                                                info!("Successfully loaded model: {}", requested_model_clone);
+                                                // Note: NodeAvailable will be broadcast on next heartbeat (every 30s)
+                                                // or the node can be manually queried to verify the model is loaded
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to load model {}: {:#}", requested_model_clone, e);
                                             }
                                         }
-                                        Err(e) => {
-                                            error!("Failed to load model {}: {:#}", requested_model, e);
-                                        }
-                                    }
+                                    });
                                 }
                             }
                             InferenceGossipMessage::ReloadCheckpoint { checkpoint_id, checkpoint_source } => {
