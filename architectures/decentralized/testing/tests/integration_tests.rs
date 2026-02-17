@@ -1132,7 +1132,7 @@ async fn test_pause_and_resume_run() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
-async fn test_rpc_fallback() {
+async fn test_solana_rpc_fallback() {
     // epochs the test will run
     let num_of_epochs_to_run = 3;
 
