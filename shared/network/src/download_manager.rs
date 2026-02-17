@@ -561,7 +561,7 @@ impl<D: Networkable + Send + 'static> DownloadManager<D> {
                 DownloadProgressItem::Error(e) => {
                     Some(DownloadManagerEvent::Failed(DownloadFailed {
                         blob_ticket: download.blob_ticket.clone(),
-                        error: e,
+                        error: e.into(),
                         tag,
                         download_type: download.r#type.clone(),
                     }))
@@ -606,7 +606,7 @@ impl<D: Networkable + Send + 'static> DownloadManager<D> {
                 warn!(
                     "Download error, removing it. idx {index}, hash {}, node provider {}: {}",
                     blob_ticket.hash(),
-                    blob_ticket.node_addr().node_id,
+                    blob_ticket.addr().id,
                     error
                 );
             }
@@ -625,7 +625,7 @@ impl<D: Networkable + Send + 'static> DownloadManager<D> {
             Ok(bytes) => match postcard::from_bytes(&bytes) {
                 Ok(decoded) => Some(DownloadManagerEvent::Complete(DownloadComplete {
                     data: decoded,
-                    from: downloader.blob_ticket.node_addr().node_id,
+                    from: downloader.blob_ticket.addr().id,
                     hash: downloader.blob_ticket.hash(),
                 })),
                 Err(err) => Some(DownloadManagerEvent::Failed(DownloadFailed {

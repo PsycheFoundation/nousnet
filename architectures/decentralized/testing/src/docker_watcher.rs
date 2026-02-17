@@ -5,8 +5,8 @@ use crate::CLIENT_CONTAINER_PREFIX;
 use bollard::container::KillContainerOptions;
 use bollard::{Docker, container::LogsOptions};
 use futures_util::StreamExt;
-use psyche_client::IntegrationTestLogMarker;
 use psyche_core::BatchId;
+use psyche_core::IntegrationTestLogMarker;
 use serde_json::Value;
 use std::str::FromStr;
 use tokio::sync::mpsc;
@@ -346,10 +346,42 @@ impl DockerWatcher {
         let state = container.state.unwrap();
         match state.status {
             Some(bollard::secret::ContainerStateStatusEnum::DEAD)
-            | Some(bollard::secret::ContainerStateStatusEnum::EXITED) => Err(
-                DockerWatcherError::ClientCrashedError(container_name.to_string()),
-            ),
+            | Some(bollard::secret::ContainerStateStatusEnum::EXITED) => {
+                let logs = self.fetch_container_logs(container_name, 150).await;
+                eprintln!(
+                    "\n========== Last 150 lines from {} ==========",
+                    container_name
+                );
+                eprintln!("{}", logs);
+                eprintln!("========== End of logs ==========\n");
+
+                Err(DockerWatcherError::ClientCrashedError(
+                    container_name.to_string(),
+                ))
+            }
             _ => Ok(()),
         }
+    }
+
+    /// Fetch the last N lines of logs from a container
+    async fn fetch_container_logs(&self, container_name: &str, tail: usize) -> String {
+        let log_options = Some(LogsOptions::<String> {
+            stderr: true,
+            stdout: true,
+            follow: false,
+            tail: tail.to_string(),
+            ..Default::default()
+        });
+
+        let mut logs = self.client.logs(container_name, log_options);
+        let mut log_lines = Vec::new();
+
+        while let Some(log) = logs.next().await {
+            if let Ok(log) = log {
+                log_lines.push(log.to_string());
+            }
+        }
+
+        log_lines.join("\n")
     }
 }
