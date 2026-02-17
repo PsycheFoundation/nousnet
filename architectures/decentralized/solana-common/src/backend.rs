@@ -596,7 +596,13 @@ impl SolanaBackend {
             match result {
                 Ok(value) => return Ok(value),
                 Err(RetryError::Retryable(e)) => {
-                    warn!("{name}: RPC {i} exhausted retries, trying next: {e}");
+                    warn!(
+                        integration_test_log_marker = %IntegrationTestLogMarker::RpcFallback,
+                        failed_rpc_index = i,
+                        next_rpc_index = i + 1,
+                        error = %e,
+                        "{name}: RPC {i} exhausted retries, trying next: {e}",
+                    );
                     last_error = Some(e);
                 }
                 Err(RetryError::NonRetryable(e)) => {

@@ -163,11 +163,11 @@ run_test_infra num_clients="1":
         NUM_REPLICAS={{ num_clients }} docker compose -f docker-compose.yml up -d psyche-test-client
     fi
 
-run_test_infra_with_proxies_validator num_clients="1":
+run_test_infra_with_rpc_fallback_proxies num_clients="1":
     #!/usr/bin/env bash
     set -e
 
-    cd docker/test/subscriptions_test
+    cd docker/test/rpc_fallback_test
 
     # Start validator only first
     echo "Starting validator and deploying contracts..."
@@ -181,7 +181,7 @@ run_test_infra_with_proxies_validator num_clients="1":
     RPC="http://127.0.0.1:8899" WS_RPC="ws://127.0.0.1:8900" RUN_ID="test" ./scripts/setup-test-run.sh
 
     # Now start the client and proxy services
-    cd docker/test/subscriptions_test
+    cd docker/test/rpc_fallback_test
     echo "Starting clients and proxies..."
     if [ "${USE_GPU}" != "0" ] && command -v nvidia-smi &> /dev/null; then
         echo "GPU detected and USE_GPU not set to 0, enabling GPU support"
@@ -192,7 +192,7 @@ run_test_infra_with_proxies_validator num_clients="1":
     fi
 
 stop_test_infra:
-    cd docker/test && docker compose -f docker-compose.yml -f subscriptions_test/docker-compose.yml down
+    cd docker/test && docker compose -f docker-compose.yml -f rpc_fallback_test/docker-compose.yml down
 
 # Run inference node with a local model (requires Python venv with vLLM)
 inference-node model="gpt2":
