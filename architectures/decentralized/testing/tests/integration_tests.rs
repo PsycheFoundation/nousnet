@@ -380,7 +380,20 @@ async fn disconnect_client() {
     let mut untrained_batches: Vec<Vec<u64>> = Vec::new();
     let mut killed_client = false;
 
-    while let Some(response) = watcher.log_rx.recv().await {
+    loop {
+        // Timeout of 3 min, instead of hanging just crash the test
+        let response = match time::timeout(Duration::from_secs(180), watcher.log_rx.recv()).await {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                println!("Log channel closed");
+                break;
+            }
+            Err(_) => {
+                println!("Test timed out waiting for events");
+                break;
+            }
+        };
+
         match response {
             Response::StateChange(_timestamp, client_id, old_state, new_state, epoch, step) => {
                 println!(
@@ -442,7 +455,7 @@ async fn disconnect_client() {
                 }
             }
 
-            // track HealthChecks send
+            // track HealthChecks sent
             Response::HealthCheck(unhealthy_client_id, _index, current_step) => {
                 println!("found unhealthy client: {unhealthy_client_id:?}");
 
@@ -454,6 +467,14 @@ async fn disconnect_client() {
                     .collect();
                 seen_health_checks.push(current_step);
                 assert!(clients_ids.contains(&unhealthy_client_id));
+
+                if killed_client && seen_health_checks.len() >= 2 {
+                    println!(
+                        "Seen {} health checks after kill, exiting",
+                        seen_health_checks.len()
+                    );
+                    break;
+                }
             }
 
             // track untrained batches
