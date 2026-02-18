@@ -76,11 +76,15 @@ impl ConnectionMonitor {
 
                     {
                         let mut conns = connections.write().unwrap();
+                        let prev_bandwidth = conns
+                            .get(&remote_id)
+                            .map(|d| d.bandwidth)
+                            .unwrap_or(0.0);
                         conns.insert(remote_id, ConnectionData {
                             endpoint_id: remote_id,
                             connection_type: conn_type,
                             latency,
-                            bandwidth: 0.0,
+                            bandwidth: prev_bandwidth,
                         });
                     }
 
@@ -168,8 +172,9 @@ impl ConnectionMonitor {
                                         }
                                     }
 
-                                    let mut conns = connections_clone.write().unwrap();
-                                    conns.remove(&remote_id);
+                                    // Don't remove the entry — keep last known
+                                    // bandwidth/latency for peer selection.
+                                    // New connections will update the data.
                                     break;
                                 }
                             }
