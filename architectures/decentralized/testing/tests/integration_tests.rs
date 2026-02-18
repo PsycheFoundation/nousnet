@@ -405,7 +405,9 @@ async fn disconnect_client() {
                     && epoch > 0
                     && new_state == RunState::WaitingForMembers.to_string()
                 {
-                    println!("Epoch ended after killing client, breaking to verify assertions");
+                    println!(
+                        "TEST REMOVE ME Epoch ended after killing client, breaking to verify assertions"
+                    );
                     break;
                 }
 
