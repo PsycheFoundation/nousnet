@@ -171,7 +171,7 @@ async fn async_main() -> Result<()> {
         } => {
             psyche_client::prepare_environment();
             info!(
-                "============ Client Startup at {} ============",
+                "============ TEST REMOVE Client Startup at {} ============",
                 OffsetDateTime::now_utc()
             );
 
