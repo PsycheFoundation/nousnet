@@ -161,6 +161,22 @@ impl PeerManagerActor {
                 );
             }
             PeerCommand::GetPeer { reply } => {
+                // Re-sort available peers by current latency before selecting,
+                // so we always pick the fastest peer based on up-to-date RTT measurements.
+                let mut peers_with_latency: Vec<_> = self
+                    .available_peers
+                    .drain(..)
+                    .map(|peer| {
+                        let latency = self.connection_monitor.get_latency(&peer);
+                        (peer, latency)
+                    })
+                    .collect();
+                peers_with_latency.sort_by_key(|(_, latency)| latency.unwrap_or(Duration::MAX));
+                self.available_peers = peers_with_latency
+                    .into_iter()
+                    .map(|(peer, _)| peer)
+                    .collect();
+
                 let peer = if let Some(peer) = self.available_peers.pop_front() {
                     info!("Selected peer {peer} to ask for the model parameters");
                     Some(peer)
