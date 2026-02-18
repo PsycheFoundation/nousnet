@@ -240,7 +240,7 @@ impl NetworkTUIState {
             inner: Some(NetworkTUIStateInner {
                 endpoint_id: s.endpoint_id,
                 endpoint_connections: s.connection_info.clone(),
-                total_data_per_sec: s.bandwidth_tracker.get_total_bandwidth(),
+                total_data_per_sec: s.bandwidth_tracker.get_total_bandwidth().await,
                 download_bandwidth_history: s.bandwidth_history.clone(),
                 downloads: s
                     .download_progesses

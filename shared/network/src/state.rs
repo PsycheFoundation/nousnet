@@ -1,18 +1,40 @@
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use iroh::EndpointId;
+use tokio::sync::RwLock;
 
 use crate::{P2PEndpointInfo, download::DownloadUpdate};
+
+/// A shared, thread-safe wrapper around `BandwidthTracker`.
+#[derive(Debug, Clone)]
+pub struct SharedBandwidthTracker(Arc<RwLock<BandwidthTracker>>);
+
+impl SharedBandwidthTracker {
+    pub fn new(average_period_secs: u64) -> Self {
+        Self(Arc::new(RwLock::new(BandwidthTracker::new(
+            average_period_secs,
+        ))))
+    }
+
+    pub async fn add_event(&self, from: EndpointId, num_bytes: u64) {
+        self.0.write().await.add_event(from, num_bytes);
+    }
+
+    pub async fn get_total_bandwidth(&self) -> f64 {
+        self.0.read().await.get_total_bandwidth()
+    }
+}
 
 #[derive(Debug)]
 pub struct State {
     pub endpoint_id: Option<EndpointId>,
     pub connection_info: Vec<P2PEndpointInfo>,
-    pub bandwidth_tracker: BandwidthTracker,
+    pub bandwidth_tracker: SharedBandwidthTracker,
     pub bandwidth_history: VecDeque<f64>,
     pub download_progesses: HashMap<iroh_blobs::Hash, DownloadUpdate>,
 }
@@ -22,7 +44,7 @@ impl State {
         Self {
             endpoint_id: Default::default(),
             connection_info: Default::default(),
-            bandwidth_tracker: BandwidthTracker::new(bandwidth_average_period),
+            bandwidth_tracker: SharedBandwidthTracker::new(bandwidth_average_period),
             bandwidth_history: Default::default(),
             download_progesses: Default::default(),
         }
@@ -64,10 +86,6 @@ impl BandwidthTracker {
                 break;
             }
         }
-    }
-
-    pub fn get_bandwidth_by_node(&self, id: &EndpointId) -> Option<f64> {
-        self.events.get(id).map(endpoint_bandwidth)
     }
 
     pub fn get_total_bandwidth(&self) -> f64 {

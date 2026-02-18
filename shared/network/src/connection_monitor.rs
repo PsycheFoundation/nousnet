@@ -4,7 +4,7 @@ use n0_future::task::AbortOnDropHandle;
 use psyche_metrics::ConnectionType;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, info};
@@ -14,6 +14,8 @@ pub struct ConnectionData {
     pub endpoint_id: EndpointId,
     pub connection_type: ConnectionType,
     pub latency: Duration,
+    /// Measured throughput in bytes/sec from QUIC transport stats
+    pub bandwidth: f64,
 }
 
 /// track active connections and their metadata
@@ -78,6 +80,7 @@ impl ConnectionMonitor {
                             endpoint_id: remote_id,
                             connection_type: conn_type,
                             latency,
+                            bandwidth: 0.0,
                         });
                     }
 
@@ -87,11 +90,23 @@ impl ConnectionMonitor {
                     tasks.spawn(async move {
                         let mut update_interval = tokio::time::interval(Duration::from_secs(5));
                         update_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        let mut prev_rx_bytes: u64 = 0;
+                        let mut prev_rx_time = Instant::now();
 
                         loop {
                             tokio::select! {
                                 _ = update_interval.tick() => {
-                                    let (conn_type, latency) = Self::extract_connection_info_from_watcher(&paths_watcher);
+                                    let (conn_type, latency, rx_bytes) = Self::extract_full_path_info(&paths_watcher);
+
+                                    let now = Instant::now();
+                                    let elapsed = now.duration_since(prev_rx_time).as_secs_f64();
+                                    let bandwidth = if elapsed > 0.0 {
+                                        (rx_bytes.saturating_sub(prev_rx_bytes)) as f64 / elapsed
+                                    } else {
+                                        0.0
+                                    };
+                                    prev_rx_bytes = rx_bytes;
+                                    prev_rx_time = now;
 
                                     let mut conns = connections_clone.write().unwrap();
                                     if let Some(data) = conns.get_mut(&remote_id) {
@@ -104,6 +119,7 @@ impl ConnectionMonitor {
 
                                         data.connection_type = conn_type;
                                         data.latency = latency;
+                                        data.bandwidth = bandwidth;
 
                                         if type_changed {
                                             info!(
@@ -173,14 +189,25 @@ impl ConnectionMonitor {
     fn extract_connection_info_from_watcher<T: Watcher<Value = iroh::endpoint::PathInfoList>>(
         paths_watcher: &T,
     ) -> (ConnectionType, Duration) {
+        let (conn_type, latency, _) = Self::extract_full_path_info(paths_watcher);
+        (conn_type, latency)
+    }
+
+    /// extract connection type, latency, and total rx bytes from a paths watcher
+    fn extract_full_path_info<T: Watcher<Value = iroh::endpoint::PathInfoList>>(
+        paths_watcher: &T,
+    ) -> (ConnectionType, Duration, u64) {
         let paths = paths_watcher.peek();
 
         if paths.is_empty() {
-            return (ConnectionType::Direct, Duration::MAX);
+            return (ConnectionType::Direct, Duration::MAX, 0);
         }
 
         // get minimum RTT across all paths
         let min_rtt = paths.iter().map(|p| p.rtt()).min().unwrap_or(Duration::MAX);
+
+        // sum rx bytes across all paths
+        let total_rx_bytes: u64 = paths.iter().map(|p| p.stats().udp_rx.bytes).sum();
 
         // determine connection type based on paths
         let has_direct = paths.iter().any(|p| p.is_ip());
@@ -193,7 +220,7 @@ impl ConnectionMonitor {
             (false, false) => ConnectionType::None,
         };
 
-        (conn_type, min_rtt)
+        (conn_type, min_rtt, total_rx_bytes)
     }
 
     /// get connection data for a specific endpoint
@@ -212,5 +239,11 @@ impl ConnectionMonitor {
     pub fn get_latency(&self, endpoint_id: &EndpointId) -> Option<Duration> {
         let conns = self.connections.read().unwrap();
         conns.get(endpoint_id).map(|data| data.latency)
+    }
+
+    /// get measured throughput (bytes/sec) for a specific endpoint
+    pub fn get_bandwidth(&self, endpoint_id: &EndpointId) -> Option<f64> {
+        let conns = self.connections.read().unwrap();
+        conns.get(endpoint_id).map(|data| data.bandwidth)
     }
 }

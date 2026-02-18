@@ -115,7 +115,7 @@ struct PeerManagerActor {
     errors_per_peers: HashMap<EndpointId, u8>,
     /// Max errors we tolerate for a peer to share a parameter blob ticket
     max_errors_per_peer: u8,
-    /// Connection monitor for latency-based peer sorting
+    /// Connection monitor for bandwidth and latency-based peer sorting
     connection_monitor: ConnectionMonitor,
 }
 
@@ -132,53 +132,46 @@ impl PeerManagerActor {
     fn handle_message(&mut self, message: PeerCommand, cancellation_token: CancellationToken) {
         match message {
             PeerCommand::SetPeers { peers } => {
-                let mut peers_with_latency: Vec<_> = peers
-                    .into_iter()
-                    .map(|peer| {
-                        let latency = self.connection_monitor.get_latency(&peer);
-                        (peer, latency)
-                    })
-                    .collect();
-                peers_with_latency.sort_by_key(|(_, latency)| latency.unwrap_or(Duration::MAX));
-
-                self.available_peers = peers_with_latency.iter().map(|(peer, _)| *peer).collect();
+                self.available_peers = peers.into_iter().collect();
                 self.errors_per_peers = self
                     .available_peers
                     .iter()
                     .map(|peer| (*peer, 0_u8))
                     .collect();
 
-                info!(
-                    "Updated peer list ({} peers) sorted by latency: {:?}",
-                    self.available_peers.len(),
-                    peers_with_latency
-                        .iter()
-                        .map(|(p, l)| (
-                            p.fmt_short().to_string(),
-                            l.map_or("unknown".into(), |d| format!("{}ms", d.as_millis()))
-                        ))
-                        .collect::<Vec<_>>()
-                );
+                info!("Updated peer list ({} peers)", self.available_peers.len(),);
             }
             PeerCommand::GetPeer { reply } => {
-                // Re-sort available peers by current latency before selecting,
-                // so we always pick the fastest peer based on up-to-date RTT measurements.
-                let mut peers_with_latency: Vec<_> = self
+                // Sort available peers by bandwidth (highest first), falling back to latency
+                let mut peers_with_priority: Vec<(EndpointId, f64, Duration)> = self
                     .available_peers
                     .drain(..)
                     .map(|peer| {
-                        let latency = self.connection_monitor.get_latency(&peer);
-                        (peer, latency)
+                        let bandwidth = self.connection_monitor.get_bandwidth(&peer).unwrap_or(0.0);
+                        let latency = self
+                            .connection_monitor
+                            .get_latency(&peer)
+                            .unwrap_or(Duration::MAX);
+                        (peer, bandwidth, latency)
                     })
                     .collect();
-                peers_with_latency.sort_by_key(|(_, latency)| latency.unwrap_or(Duration::MAX));
-                self.available_peers = peers_with_latency
-                    .into_iter()
-                    .map(|(peer, _)| peer)
-                    .collect();
+                // Sort: highest bandwidth first; for peers with equal bandwidth, use lowest latency
+                peers_with_priority.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                });
+                self.available_peers = peers_with_priority.iter().map(|(p, _, _)| *p).collect();
 
                 let peer = if let Some(peer) = self.available_peers.pop_front() {
-                    info!("Selected peer {peer} to ask for the model parameters");
+                    info!(
+                        "Selected peer {} (bandwidth: {:.0} B/s) to ask for the model parameters",
+                        peer,
+                        peers_with_priority
+                            .first()
+                            .map(|(_, bw, _)| *bw)
+                            .unwrap_or(0.0)
+                    );
                     Some(peer)
                 } else {
                     info!("No available peers to ask for the model parameters at the moment");
