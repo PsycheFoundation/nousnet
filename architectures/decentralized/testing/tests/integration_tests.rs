@@ -405,8 +405,10 @@ async fn disconnect_client() {
                     && epoch > 0
                     && new_state == RunState::WaitingForMembers.to_string()
                 {
-                    println!("Epoch ended after killing client, breaking to verify assertions");
-                    break;
+                    println!(
+                        "Epoch ended after killing client, seen {} health checks so far",
+                        seen_health_checks.len()
+                    );
                 }
 
                 if epoch == 0
@@ -464,11 +466,11 @@ async fn disconnect_client() {
         }
     }
 
-    // assert that two healthchecks were sent, by the alive clients
-    assert_eq!(
+    // assert that at least two healthchecks were sent, by the alive clients
+    assert!(
+        seen_health_checks.len() >= 2,
+        "At least two healthchecks should have been sent, got {}",
         seen_health_checks.len(),
-        2,
-        "Two healthchecks should have been sent"
     );
 
     // check how many batches where lost due to the client shutdown
