@@ -7,6 +7,10 @@
 // The test infrastructure will automatically use docker-compose.gpu.yml when GPU is available.
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+/// Maximum time to wait between log events before declaring the test stuck.
+/// Warmup takes up to warmup_time (100s), so 6 minutes gives ample margin.
+const EPOCH_EVENT_TIMEOUT_SECS: u64 = 360;
+
 use anchor_client::solana_sdk::signature::{Keypair, Signer};
 use bollard::container::StartContainerOptions;
 use bollard::{Docker, container::KillContainerOptions};
@@ -61,46 +65,56 @@ async fn test_one_clients_three_epochs_run() {
 
     // Initialize solana client to query the coordinator state
     let solana_client = SolanaTestClient::new(run_id, None).await;
-    let mut live_interval = time::interval(Duration::from_secs(10));
 
     loop {
-        tokio::select! {
-            _ = live_interval.tick() => {
-                if let Err(e) = watcher.monitor_clients_health(1).await {
-                    panic!("{}", e);
+        // Timeout of 6 min per event, instead of hanging just crash the test
+        let response = match time::timeout(
+            Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
+            watcher.log_rx.recv(),
+        )
+        .await
+        {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                println!("Log channel closed");
+                break;
+            }
+            Err(_) => {
+                let state = solana_client.get_run_state().await;
+                let epoch = solana_client.get_current_epoch().await;
+                let step = solana_client.get_last_step().await;
+                panic!(
+                    "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+                );
+            }
+        };
+
+        match response {
+            Response::StateChange(timestamp, _client_1, old_state, new_state, _, _) => {
+                let _coordinator_state = solana_client.get_run_state().await;
+                println!(
+                    "client: new_state: {new_state}, old_state: {old_state}, timestamp: {timestamp}"
+                );
+            }
+            Response::Loss(client, epoch, step, loss) => {
+                println!("client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}");
+                // assert that the loss decreases each epoch or at least dont peak
+                if epoch as i64 > current_epoch {
+                    current_epoch = epoch as i64;
+
+                    let Some(loss) = loss else {
+                        println!("Reached new epoch but loss was NaN");
+                        continue;
+                    };
+
+                    assert!(loss < last_epoch_loss * 1.1);
+                    last_epoch_loss = loss;
+                    if epoch == num_of_epochs_to_run {
+                        break;
+                    }
                 }
             }
-            response = watcher.log_rx.recv() => {
-                match response {
-                    Some(Response::StateChange(timestamp, _client_1, old_state, new_state, _ , _)) => {
-                        let _coordinator_state = solana_client.get_run_state().await;
-                        println!(
-                            "client: new_state: {new_state}, old_state: {old_state}, timestamp: {timestamp}"
-                        );
-                    }
-                    Some(Response::Loss(client, epoch, step, loss)) => {
-                        println!(
-                            "client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}"
-                        );
-                        // assert that the loss decreases each epoch or at least dont peak
-                        if epoch as i64 > current_epoch {
-                            current_epoch = epoch as i64;
-
-                            let Some(loss) = loss else {
-                                println!("Reached new epoch but loss was NaN");
-                                continue;
-                            };
-
-                            assert!(loss < last_epoch_loss * 1.1);
-                            last_epoch_loss = loss;
-                            if epoch == num_of_epochs_to_run {
-                                break;
-                            }
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            _ => unreachable!(),
         }
     }
 }
@@ -123,7 +137,7 @@ async fn test_two_clients_three_epochs_run() {
     let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
     let mut watcher = DockerWatcher::new(docker.clone());
 
-    // Initialize a Solana run with 1 client
+    // Initialize a Solana run with 2 clients
     let _cleanup = e2e_testing_setup(docker.clone(), 2).await;
 
     // Monitor the client container
@@ -149,46 +163,56 @@ async fn test_two_clients_three_epochs_run() {
 
     // Initialize solana client to query the coordinator state
     let solana_client = SolanaTestClient::new(run_id, None).await;
-    let mut live_interval = time::interval(Duration::from_secs(10));
 
     loop {
-        tokio::select! {
-            _ = live_interval.tick() => {
-                if let Err(e) = watcher.monitor_clients_health(2).await {
-                    panic!("{}", e);
+        // Timeout of 6 min per event, instead of hanging just crash the test
+        let response = match time::timeout(
+            Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
+            watcher.log_rx.recv(),
+        )
+        .await
+        {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                println!("Log channel closed");
+                break;
+            }
+            Err(_) => {
+                let state = solana_client.get_run_state().await;
+                let epoch = solana_client.get_current_epoch().await;
+                let step = solana_client.get_last_step().await;
+                panic!(
+                    "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+                );
+            }
+        };
+
+        match response {
+            Response::StateChange(timestamp, _client_1, old_state, new_state, _, _) => {
+                let _coordinator_state = solana_client.get_run_state().await;
+                println!(
+                    "client: new_state: {new_state}, old_state: {old_state}, timestamp: {timestamp}"
+                );
+            }
+            Response::Loss(client, epoch, step, loss) => {
+                println!("client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}");
+                // assert that the loss decreases each epoch
+                if epoch as i64 > current_epoch {
+                    current_epoch = epoch as i64;
+
+                    let Some(loss) = loss else {
+                        println!("Reached new epoch but loss was NaN");
+                        continue;
+                    };
+
+                    assert!(loss < last_epoch_loss * 1.1);
+                    last_epoch_loss = loss;
+                    if epoch == num_of_epochs_to_run {
+                        break;
+                    }
                 }
             }
-            response = watcher.log_rx.recv() => {
-                match response {
-                    Some(Response::StateChange(timestamp, _client_1, old_state, new_state, _ , _)) => {
-                        let _coordinator_state = solana_client.get_run_state().await;
-                        println!(
-                            "client: new_state: {new_state}, old_state: {old_state}, timestamp: {timestamp}"
-                        );
-                    }
-                    Some(Response::Loss(client, epoch, step, loss)) => {
-                        println!(
-                            "client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}"
-                        );
-                        // assert that the loss decreases each epoch
-                        if epoch as i64 > current_epoch {
-                            current_epoch = epoch as i64;
-
-                            let Some(loss) = loss else {
-                                println!("Reached new epoch but loss was NaN");
-                                continue;
-                            };
-
-                            assert!(loss < last_epoch_loss * 1.1);
-                            last_epoch_loss = loss;
-                            if epoch == num_of_epochs_to_run {
-                                break;
-                            }
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            _ => unreachable!(),
         }
     }
 }
@@ -382,7 +406,12 @@ async fn disconnect_client() {
 
     loop {
         // Timeout of 3 min, instead of hanging just crash the test
-        let response = match time::timeout(Duration::from_secs(180), watcher.log_rx.recv()).await {
+        let response = match time::timeout(
+            Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
+            watcher.log_rx.recv(),
+        )
+        .await
+        {
             Ok(Some(response)) => response,
             Ok(None) => {
                 println!("Log channel closed");
