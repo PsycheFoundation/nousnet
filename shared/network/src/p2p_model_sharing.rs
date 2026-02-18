@@ -169,7 +169,7 @@ impl PeerManagerActor {
                     } else {
                         format!("{:.1}", lat.as_secs_f64() * 1000.0)
                     };
-                    info!(
+                    debug!(
                         "  Peer ranking #{}: {} (bw: {:.1} KB/s, latency: {}ms)",
                         i + 1,
                         peer,
