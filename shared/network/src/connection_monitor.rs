@@ -121,6 +121,15 @@ impl ConnectionMonitor {
                                         data.latency = latency;
                                         data.bandwidth = bandwidth;
 
+                                        if bandwidth > 0.0 {
+                                            debug!(
+                                                remote = %remote_id.fmt_short(),
+                                                bandwidth_kbps = format_args!("{:.1}", bandwidth / 1024.0),
+                                                latency_ms = latency.as_millis(),
+                                                "connection stats update"
+                                            );
+                                        }
+
                                         if type_changed {
                                             info!(
                                                 remote = %remote_id.fmt_short(),
