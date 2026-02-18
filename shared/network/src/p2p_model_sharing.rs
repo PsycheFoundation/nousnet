@@ -162,32 +162,14 @@ impl PeerManagerActor {
                         .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
                 });
 
-                // Log the full peer ranking for debugging
-                for (i, (peer, bw, lat)) in peers_with_priority.iter().enumerate() {
-                    let lat_ms = if *lat == Duration::MAX {
-                        "unknown".to_string()
-                    } else {
-                        format!("{:.1}", lat.as_secs_f64() * 1000.0)
-                    };
-                    debug!(
-                        "  Peer ranking #{}: {} (bw: {:.1} KB/s, latency: {}ms)",
-                        i + 1,
-                        peer,
-                        bw / 1024.0,
-                        lat_ms,
-                    );
-                }
-
-                self.available_peers = peers_with_priority.iter().map(|(p, _, _)| *p).collect();
+                self.available_peers = peers_with_priority.into_iter().map(|(p, _, _)| p).collect();
 
                 let peer = if let Some(peer) = self.available_peers.pop_front() {
+                    let bandwidth = self.connection_monitor.get_bandwidth(&peer).unwrap_or(0.0);
                     info!(
                         "Selected peer {} (bandwidth: {:.1} KB/s) for model parameters",
                         peer,
-                        peers_with_priority
-                            .first()
-                            .map(|(_, bw, _)| *bw / 1024.0)
-                            .unwrap_or(0.0)
+                        bandwidth / 1024.0,
                     );
                     Some(peer)
                 } else {
