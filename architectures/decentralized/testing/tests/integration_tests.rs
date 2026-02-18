@@ -1031,8 +1031,8 @@ async fn test_pause_and_resume_run() {
             Some(Response::StateChange(_timestamp, _client, old_state, new_state, epoch, step)) => {
                 println!("epoch: {epoch} step: {step} state change: {old_state} => {new_state}");
 
-                // Wait until step 5 before pausing
-                if !paused && step >= 5 && new_state == RunState::RoundTrain.to_string() {
+                // Wait until step 2 before pausing
+                if !paused && step >= 2 && new_state == RunState::RoundTrain.to_string() {
                     println!("Pausing the run...");
                     solana_client
                         .set_paused(true)
@@ -1040,10 +1040,12 @@ async fn test_pause_and_resume_run() {
                         .expect("Failed to pause run");
                     paused = true;
                     println!("Run paused! Waiting for Paused state...");
-                }
 
-                // When coordinator enters Paused state, kill client and resume
-                if paused && !client_killed && new_state == RunState::Paused.to_string() {
+                    // Wait here to see if we reach Paused
+                    assert!(
+                        solana_client.wait_for_run_state(RunState::Paused, 60).await,
+                        "Coordinator did not reach Paused state"
+                    );
                     println!("Coordinator is in Paused state. Killing client and resuming...");
 
                     // Kill the old container
