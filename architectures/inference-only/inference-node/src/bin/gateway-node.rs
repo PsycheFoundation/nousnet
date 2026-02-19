@@ -415,8 +415,9 @@ async fn handle_assign_models(
                 .await
                 .insert(node_id, spec.model_name.clone());
 
-            // Broadcast LoadModel to the specific node
+            // Broadcast LoadModel with target node specified
             let load_msg = InferenceGossipMessage::LoadModel {
+                target_node_id: Some(node_id),
                 model_name: spec.model_name.clone(),
                 model_source: model_source.clone(),
             };
@@ -749,6 +750,7 @@ async fn run_gateway() -> Result<()> {
                                         // Re-send LoadModel (assuming HuggingFace for now)
                                         // TODO: store source_type with assignment
                                         let load_msg = InferenceGossipMessage::LoadModel {
+                                            target_node_id: Some(*node_id),
                                             model_name: assigned_model.clone(),
                                             model_source: ModelSource::HuggingFace(assigned_model.clone()),
                                         };

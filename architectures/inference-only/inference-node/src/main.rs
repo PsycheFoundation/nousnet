@@ -291,7 +291,17 @@ async fn main() -> Result<()> {
                             InferenceGossipMessage::NodeUnavailable => {
                                 info!("Peer {} is no longer available", peer_id.fmt_short());
                             }
-                            InferenceGossipMessage::LoadModel { model_name: requested_model, model_source } => {
+                            InferenceGossipMessage::LoadModel { target_node_id, model_name: requested_model, model_source } => {
+                                // Check if this message is for us
+                                let my_node_id = network.endpoint_id();
+                                if let Some(target) = target_node_id {
+                                    if target != my_node_id {
+                                        debug!("LoadModel not for us (target: {}, me: {}), ignoring",
+                                               target.fmt_short(), my_node_id.fmt_short());
+                                        continue;
+                                    }
+                                }
+
                                 info!("Received LoadModel request from {}: model={}, source={:?}",
                                       peer_id.fmt_short(), requested_model, model_source);
 

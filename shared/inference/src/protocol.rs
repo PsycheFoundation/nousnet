@@ -1,5 +1,6 @@
 //! Protocol types for inference requests and responses
 
+use iroh::PublicKey;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -17,6 +18,7 @@ pub enum InferenceGossipMessage {
     },
     NodeUnavailable,
     LoadModel {
+        target_node_id: Option<PublicKey>, // None = all nodes, Some(id) = specific node
         model_name: String,
         model_source: ModelSource,
     },
