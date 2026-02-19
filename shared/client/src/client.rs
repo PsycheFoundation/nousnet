@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use anyhow::{Error, Result, bail};
 use psyche_coordinator::{Commitment, CommitteeSelection, Coordinator, RunState};
 use psyche_core::{IntegrationTestLogMarker, NodeIdentity};
-use psyche_metrics::{ClientMetrics, ClientRoleInRound, ConnectionType, PeerConnection};
+use psyche_metrics::{ClientMetrics, ClientRoleInRound, PeerConnection};
 use psyche_network::{
     AuthenticatableIdentity, DownloadComplete, DownloadSchedulerHandle, DownloadType, EndpointId,
     ModelRequestType, NetworkEvent, NetworkTUIState, PeerManagerHandle, RetryConfig,
@@ -625,13 +625,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                 let remote_infos: Vec<_> = p2p
                                     .remote_infos()
                                     .into_iter()
-
-                                    .filter(|info| !matches!(info.path, ConnectionType::None))
+                                    .filter(|info| info.selected_path.is_some())
                                     .map(|info| {
                                         PeerConnection {
                                             endpoint_id: info.id.to_string(),
-                                            connection_type:info.path,
-                                            latency: info.latency as f32
+                                            selected_path: info.selected_path,
                                         }
                                     })
                                     .collect();
