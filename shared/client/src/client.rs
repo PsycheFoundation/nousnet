@@ -311,7 +311,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
 
                                         match dl.download_type {
                                             DownloadType::ModelSharing(request_type) => {
-                                                download_scheduler.release_capacity();
+                                                // Only release capacity for parameter downloads;
+                                                // config downloads don't consume capacity
+                                                if matches!(request_type, ModelRequestType::Parameter(_)) {
+                                                    download_scheduler.release_capacity();
+                                                }
 
                                                 metrics.record_p2p_model_parameter_download_failed();
                                                 peer_manager.report_blob_ticket_request_error(dl.blob_ticket.addr().id, Some(dl.blob_ticket.clone()));
@@ -481,20 +485,19 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                 let _ = tx_request_download.send((retry.ticket, retry.tag));
                             }
 
-                            // Handle ModelSharing retries (Parameter + Config, with rate limiting via scheduler)
-                            // The scheduler checks capacity and only returns retries if slots are available
-                            while let Some(retry) = download_scheduler.try_start_model_sharing_retry().await {
+                            // Handle config retries (no capacity limiting, config doesn't consume slots)
+                            for retry in download_scheduler.get_due_config_retries().await {
                                 metrics.record_download_retry(retry.hash);
-                                match retry.download_type {
-                                    DownloadType::ModelSharing(ModelRequestType::Parameter(ref parameter)) => {
-                                        info!("Retrying download for model parameter: {parameter}, (attempt {})", retry.retries);
-                                        let _ = tx_params_download.send((retry.ticket, ModelRequestType::Parameter(parameter.clone())));
-                                    },
-                                    DownloadType::ModelSharing(ModelRequestType::Config) => {
-                                        info!("Retrying download for model config, (attempt {})", retry.retries);
-                                        let _ = tx_config_download.send(retry.ticket);
-                                    },
-                                    _ => unreachable!("We should only be retrying model sharing downloads here"),
+                                info!("Retrying download for model config, (attempt {})", retry.retries);
+                                let _ = tx_config_download.send(retry.ticket);
+                            }
+
+                            // Handle parameter retries (with rate limiting via scheduler capacity)
+                            while let Some(retry) = download_scheduler.start_parameter_retry().await {
+                                metrics.record_download_retry(retry.hash);
+                                if let DownloadType::ModelSharing(ModelRequestType::Parameter(ref parameter)) = retry.download_type {
+                                    info!("Retrying download for model parameter: {parameter}, (attempt {})", retry.retries);
+                                    let _ = tx_params_download.send((retry.ticket, ModelRequestType::Parameter(parameter.clone())));
                                 }
                             }
                         }

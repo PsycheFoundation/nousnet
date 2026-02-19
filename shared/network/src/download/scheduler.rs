@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
 use super::manager::DownloadType;
+use crate::ModelRequestType;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -73,8 +74,11 @@ enum SchedulerMessage {
         hash: Hash,
         response: oneshot::Sender<bool>,
     },
-    TryStartModelSharingRetry {
+    StartParameterRetry {
         response: oneshot::Sender<Option<ReadyRetry>>,
+    },
+    GetDueConfigRetries {
+        response: oneshot::Sender<Vec<ReadyRetry>>,
     },
     GetDueDistroRetries {
         response: oneshot::Sender<Vec<ReadyRetry>>,
@@ -155,10 +159,18 @@ impl DownloadSchedulerHandle {
         .await
     }
 
-    pub async fn try_start_model_sharing_retry(&self) -> Option<ReadyRetry> {
+    pub async fn start_parameter_retry(&self) -> Option<ReadyRetry> {
         self.request(
-            |response| SchedulerMessage::TryStartModelSharingRetry { response },
+            |response| SchedulerMessage::StartParameterRetry { response },
             None,
+        )
+        .await
+    }
+
+    pub async fn get_due_config_retries(&self) -> Vec<ReadyRetry> {
+        self.request(
+            |response| SchedulerMessage::GetDueConfigRetries { response },
+            Vec::new(),
         )
         .await
     }
@@ -265,7 +277,7 @@ impl DownloadSchedulerActor {
                 let _ = response.send(removed);
             }
 
-            SchedulerMessage::TryStartModelSharingRetry { response } => {
+            SchedulerMessage::StartParameterRetry { response } => {
                 if self.active_downloads >= self.max_concurrent {
                     let _ = response.send(None);
                     return;
@@ -276,11 +288,13 @@ impl DownloadSchedulerActor {
                     .retry_entries
                     .iter()
                     .find(|(_, entry)| {
-                        matches!(&entry.download_type, DownloadType::ModelSharing(_))
-                            && entry
-                                .retry_time
-                                .map(|retry_time| now >= retry_time)
-                                .unwrap_or(true)
+                        matches!(
+                            &entry.download_type,
+                            DownloadType::ModelSharing(ModelRequestType::Parameter(_))
+                        ) && entry
+                            .retry_time
+                            .map(|retry_time| now >= retry_time)
+                            .unwrap_or(true)
                     })
                     .map(|(hash, _)| *hash);
 
@@ -291,6 +305,29 @@ impl DownloadSchedulerActor {
                 } else {
                     let _ = response.send(None);
                 }
+            }
+
+            SchedulerMessage::GetDueConfigRetries { response } => {
+                let due_hashes: Vec<Hash> = self
+                    .retry_entries
+                    .iter()
+                    .filter(|(_, entry)| {
+                        matches!(
+                            &entry.download_type,
+                            DownloadType::ModelSharing(ModelRequestType::Config)
+                        )
+                    })
+                    .map(|(hash, _)| *hash)
+                    .collect();
+
+                let mut ready_retries = Vec::new();
+                for hash in due_hashes {
+                    if let Some(entry) = self.retry_entries.remove(&hash) {
+                        ready_retries.push(entry.into_ready_retry(hash));
+                    }
+                }
+
+                let _ = response.send(ready_retries);
             }
 
             SchedulerMessage::GetDueDistroRetries { response } => {
@@ -461,7 +498,7 @@ mod tests {
         assert_eq!(result, RetryQueueResult::Queued);
 
         assert!(
-            scheduler.try_start_model_sharing_retry().await.is_none(),
+            scheduler.start_parameter_retry().await.is_none(),
             "Should not return retry when at capacity"
         );
 
@@ -469,16 +506,15 @@ mod tests {
         tokio::task::yield_now().await;
 
         assert!(
-            scheduler.try_start_model_sharing_retry().await.is_some(),
+            scheduler.start_parameter_retry().await.is_some(),
             "Should return retry when capacity is available"
         );
     }
 
     #[tokio::test]
-    async fn test_model_sharing_retries_are_immediate() {
+    async fn test_parameter_retries_are_immediate() {
         let scheduler = DownloadSchedulerHandle::new(2, RetryConfig::default());
 
-        // Parameter retry is immediate
         scheduler
             .queue_failed_download(
                 dummy_ticket(1),
@@ -486,15 +522,24 @@ mod tests {
                 param_download_type(1),
             )
             .await;
-        assert!(scheduler.try_start_model_sharing_retry().await.is_some());
+        assert!(scheduler.start_parameter_retry().await.is_some());
+    }
 
-        // Config retry is immediate and preserves type
+    #[tokio::test]
+    async fn test_config_retries_dont_consume_capacity() {
+        let scheduler = DownloadSchedulerHandle::new(1, RetryConfig::default());
+
+        // Fill capacity
+        scheduler.wait_for_capacity().await.unwrap();
+
+        // Config retry should still be returned even at full capacity
         scheduler
             .queue_failed_download(dummy_ticket(2), Tag::from("config"), config_download_type())
             .await;
-        let retry = scheduler.try_start_model_sharing_retry().await.unwrap();
+        let retries = scheduler.get_due_config_retries().await;
+        assert_eq!(retries.len(), 1);
         assert!(matches!(
-            retry.download_type,
+            retries[0].download_type,
             DownloadType::ModelSharing(ModelRequestType::Config)
         ));
     }
@@ -630,7 +675,7 @@ mod tests {
                     .await,
                 RetryQueueResult::Queued
             );
-            scheduler.try_start_model_sharing_retry().await;
+            scheduler.start_parameter_retry().await;
         }
     }
 
