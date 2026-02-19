@@ -454,7 +454,7 @@ async fn disconnect_client() {
                 }
 
                 if epoch == 0
-                    && step == 2
+                    && step == 1
                     && old_state == RunState::RoundTrain.to_string()
                     && !killed_client
                 {
@@ -524,11 +524,13 @@ async fn disconnect_client() {
     );
 
     // check how many batches where lost due to the client shutdown
-    // ideally, we should only lose 2 batches (The ones assigned in the step where it didn't train and the ones where it ran the Health Check and gets kicked)
+    // we kill at step=1 so the dead client misses 2 rounds (heights 2 and 3),
+    // and both surviving clients log untrained batches for each missing batch.
     // see issue: https://github.com/NousResearch/psyche/issues/269
     assert!(
-        untrained_batches.len() <= 3,
-        "Num of untrained batches should be less than 4"
+        untrained_batches.len() <= 8,
+        "Num of untrained batches should be less than 9, got {}",
+        untrained_batches.len()
     );
 }
 
