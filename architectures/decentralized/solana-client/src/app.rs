@@ -231,7 +231,7 @@ impl App {
             .iter()
             .find(|c| c.id.signer == signer)
         {
-            let was_unhealthy = start_account_state
+            let epoch_client = start_account_state
                 .coordinator
                 .epoch_state
                 .clients
@@ -243,19 +243,29 @@ impl App {
                         .exited_clients
                         .iter(),
                 )
-                .any(|c| c.id == existing_client.id && c.state != ClientState::Healthy);
+                .find(|c| c.id == existing_client.id);
 
-            let is_active_participant =
-                existing_client.active == start_account_state.clients_state.next_active;
+            let was_unhealthy = epoch_client
+                .map(|c| c.state != ClientState::Healthy)
+                .unwrap_or(false);
+            let is_healthy = epoch_client
+                .map(|c| c.state == ClientState::Healthy)
+                .unwrap_or(false);
+            let is_in_waiting_or_warmup = epoch_client.is_none()
+                && matches!(
+                    start_account_state.coordinator.run_state,
+                    RunState::WaitingForMembers
+                )
+                && existing_client.active == start_account_state.clients_state.next_active;
 
             if was_unhealthy {
                 info!(
                     wallet = %signer,
                     "Previous session was marked unhealthy, re-joining immediately"
                 );
-            } else if is_active_participant {
+            } else if is_healthy || is_in_waiting_or_warmup {
                 anyhow::bail!(
-                    "Another client with wallet {} is currently an active participant in the run. \
+                    "Another client with wallet {} is currently active in the run. \
                      Running two clients with the same Solana private key causes iroh relay conflicts. \
                      Stop the other client first.",
                     signer,
