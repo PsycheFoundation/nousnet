@@ -262,7 +262,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                match response {
                      Some(Response::Loss(_client, epoch, step, _loss)) => {
                           if epoch == 1 && step > 22 {
-                               panic!("DELETE ME Second epoch started and the clients did not get the model");
+                               panic!("Second epoch started and the clients did not get the model");
                           }
                      }
                      Some(Response::LoadedModel(checkpoint)) => {
@@ -414,12 +414,15 @@ async fn disconnect_client() {
         {
             Ok(Some(response)) => response,
             Ok(None) => {
-                println!("Log channel closed");
-                break;
+                panic!("Log channel closed unexpectedly");
             }
             Err(_) => {
-                println!("Test timed out waiting for events");
-                break;
+                let state = solana_client.get_run_state().await;
+                let epoch = solana_client.get_current_epoch().await;
+                let step = solana_client.get_last_step().await;
+                panic!(
+                    "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+                );
             }
         };
 
