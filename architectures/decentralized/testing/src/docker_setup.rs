@@ -82,47 +82,6 @@ pub async fn e2e_testing_setup_with_min(
     DockerTestCleanup {}
 }
 
-pub async fn e2e_testing_setup_subscription(
-    docker_client: Arc<Docker>,
-    init_num_clients: usize,
-) -> DockerTestCleanup {
-    remove_old_client_containers(docker_client).await;
-    #[cfg(not(feature = "python"))]
-    let config_file_path = ConfigBuilder::new()
-        .with_num_clients(init_num_clients)
-        .build();
-    #[cfg(feature = "python")]
-    let config_file_path = ConfigBuilder::new()
-        .with_num_clients(init_num_clients)
-        .with_architecture("HfAuto")
-        .with_batch_size(8 * init_num_clients as u32)
-        .build();
-
-    println!("[+] Config file written to: {}", config_file_path.display());
-    let mut command = Command::new("just");
-    let command = command
-        .args([
-            "run_test_infra_with_proxies_validator",
-            &format!("{init_num_clients}"),
-        ])
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-
-    let output = command
-        .output()
-        .expect("Failed to spawn docker compose instances");
-    if !output.status.success() {
-        panic!("Error: {}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    println!("\n[+] Docker compose network spawned successfully!");
-    println!();
-
-    spawn_ctrl_c_task();
-
-    DockerTestCleanup {}
-}
-
 pub async fn e2e_testing_setup_rpc_fallback(
     docker_client: Arc<Docker>,
     init_num_clients: usize,
