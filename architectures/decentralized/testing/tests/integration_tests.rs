@@ -774,7 +774,7 @@ async fn test_solana_subscriptions() {
                     Some(Response::StateChange(_timestamp, _client_1, old_state, new_state, epoch , step)) => {
                         if old_state == RunState::WaitingForMembers.to_string() {
                             println!(
-                                "REMOVEME Starting epoch: {epoch}",
+                                "Starting epoch: {epoch}",
                             );
                         }
 
