@@ -466,49 +466,71 @@ async fn handle_get_assignments(
 
     let mut result = Vec::new();
 
-    for (node_id, assigned_model) in assignments.iter() {
-        let status = match nodes.get(node_id) {
+    // Show ALL discovered nodes, not just assigned ones
+    for (node_id, node_info) in nodes.iter() {
+        let (assigned_model, status) = match assignments.get(node_id) {
             None => {
-                info!(
-                    "Node {} not in available_nodes (offline)",
-                    node_id.fmt_short()
-                );
-                "offline".to_string()
+                // Node discovered but not assigned
+                let status = if node_info.model_name.is_some() {
+                    "unassigned_with_model".to_string()
+                } else {
+                    "unassigned".to_string()
+                };
+                (None, status)
             }
-            Some(node_info) => match &node_info.model_name {
-                None => {
-                    info!(
-                        "Node {} has no model loaded (assigned: {})",
-                        node_id.fmt_short(),
-                        assigned_model
-                    );
-                    "idle".to_string()
-                }
-                Some(current_model) if current_model == assigned_model => {
-                    info!(
-                        "Node {} loaded correct model: {}",
-                        node_id.fmt_short(),
-                        current_model
-                    );
-                    "loaded".to_string()
-                }
-                Some(current_model) => {
-                    info!(
-                        "Node {} has model '{}' but assigned model is '{}'",
-                        node_id.fmt_short(),
-                        current_model,
-                        assigned_model
-                    );
-                    "loading".to_string() // Has different model, probably loading
-                }
-            },
+            Some(assigned_model) => {
+                // Node has an assignment
+                let status = match &node_info.model_name {
+                    None => {
+                        info!(
+                            "Node {} has no model loaded (assigned: {})",
+                            node_id.fmt_short(),
+                            assigned_model
+                        );
+                        "idle".to_string()
+                    }
+                    Some(current_model) if current_model == assigned_model => {
+                        info!(
+                            "Node {} loaded correct model: {}",
+                            node_id.fmt_short(),
+                            current_model
+                        );
+                        "loaded".to_string()
+                    }
+                    Some(current_model) => {
+                        info!(
+                            "Node {} has model '{}' but assigned model is '{}'",
+                            node_id.fmt_short(),
+                            current_model,
+                            assigned_model
+                        );
+                        "loading".to_string() // Has different model, probably loading
+                    }
+                };
+                (Some(assigned_model.clone()), status)
+            }
         };
 
         result.push(AssignmentInfo {
             node_id: node_id.to_string(),
-            model_name: assigned_model.clone(),
+            model_name: assigned_model.unwrap_or_else(|| "<unassigned>".to_string()),
             status,
         });
+    }
+
+    // Also include offline nodes that have assignments
+    for (node_id, assigned_model) in assignments.iter() {
+        if !nodes.contains_key(node_id) {
+            info!(
+                "Node {} not in available_nodes (offline)",
+                node_id.fmt_short()
+            );
+            result.push(AssignmentInfo {
+                node_id: node_id.to_string(),
+                model_name: assigned_model.clone(),
+                status: "offline".to_string(),
+            });
+        }
     }
 
     Json(result)
