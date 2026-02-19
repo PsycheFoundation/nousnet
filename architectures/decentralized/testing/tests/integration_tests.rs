@@ -250,7 +250,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
     println!("Waiting for run to go on with the first client");
     tokio::time::sleep(Duration::from_secs(60)).await;
 
-    println!("Adding new clients");
+    println!("DELETE ME Adding new clients");
     for i in 1..=n_new_clients {
         spawn_new_client(docker.clone(), None).await.unwrap();
         let _monitor_client = watcher
