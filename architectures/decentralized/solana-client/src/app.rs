@@ -245,10 +245,20 @@ impl App {
                 )
                 .any(|c| c.id == existing_client.id && c.state != ClientState::Healthy);
 
+            let is_active_participant =
+                existing_client.active == start_account_state.clients_state.next_active;
+
             if was_unhealthy {
                 info!(
                     wallet = %signer,
                     "Previous session was marked unhealthy, re-joining immediately"
+                );
+            } else if is_active_participant {
+                anyhow::bail!(
+                    "Another client with wallet {} is currently an active participant in the run. \
+                     Running two clients with the same Solana private key causes iroh relay conflicts. \
+                     Stop the other client first.",
+                    signer,
                 );
             } else if existing_client.last_seen > 0 {
                 let now = SystemTime::now()
