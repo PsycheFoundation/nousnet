@@ -258,43 +258,47 @@ impl App {
                 )
                 && existing_client.active == start_account_state.clients_state.next_active;
 
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let elapsed = if existing_client.last_seen > 0 {
+                now - existing_client.last_seen
+            } else {
+                i64::MAX // legacy client with no last_seen, treat as stale
+            };
+            const STALENESS_THRESHOLD_SECS: i64 = 30;
+            let is_stale = elapsed >= STALENESS_THRESHOLD_SECS;
+
             if was_unhealthy {
                 info!(
                     wallet = %signer,
                     "Previous session was marked unhealthy, re-joining immediately"
                 );
-            } else if is_healthy || is_in_waiting_or_warmup {
+            } else if (is_healthy || is_in_waiting_or_warmup) && !is_stale {
                 anyhow::bail!(
                     "Another client with wallet {} is currently active in the run. \
                      Running two clients with the same Solana private key causes iroh relay conflicts. \
                      Stop the other client first.",
                     signer,
                 );
-            } else if existing_client.last_seen > 0 {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64;
-                let elapsed = now - existing_client.last_seen;
-                const STALENESS_THRESHOLD_SECS: i64 = 30;
-                if elapsed < STALENESS_THRESHOLD_SECS {
-                    anyhow::bail!(
-                        "Another client with wallet {} was active {} seconds ago (last_seen={}). \
-                         Running two clients with the same Solana private key causes iroh relay conflicts. \
-                         Wait at least {} seconds after the previous client stopped before restarting.",
-                        signer,
-                        elapsed,
-                        existing_client.last_seen,
-                        STALENESS_THRESHOLD_SECS
-                    );
-                } else {
-                    info!(
-                        wallet = %signer,
-                        last_seen = existing_client.last_seen,
-                        elapsed_secs = elapsed,
-                        "Re-joining after a previous session (last_seen is stale)"
-                    );
-                }
+            } else if !is_stale {
+                anyhow::bail!(
+                    "Another client with wallet {} was active {} seconds ago (last_seen={}). \
+                     Running two clients with the same Solana private key causes iroh relay conflicts. \
+                     Wait at least {} seconds after the previous client stopped before restarting.",
+                    signer,
+                    elapsed,
+                    existing_client.last_seen,
+                    STALENESS_THRESHOLD_SECS
+                );
+            } else {
+                info!(
+                    wallet = %signer,
+                    last_seen = existing_client.last_seen,
+                    elapsed_secs = elapsed,
+                    "Re-joining after a previous session (last_seen is stale)"
+                );
             }
         }
 
