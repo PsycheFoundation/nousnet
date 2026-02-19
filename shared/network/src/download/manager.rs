@@ -320,10 +320,12 @@ impl<D: Networkable + Send + 'static> DownloadManager<D> {
                     download_type: download.download_type.clone(),
                 })),
                 DownloadProgressItem::Progress(bytes_amount) => {
+                    let delta = bytes_amount.saturating_sub(download.last_offset);
+                    download.last_offset = bytes_amount;
                     Some(DownloadManagerEvent::Update(DownloadUpdate {
                         blob_ticket: download.blob_ticket.clone(),
                         tag,
-                        downloaded_size_delta: bytes_amount.saturating_sub(download.last_offset),
+                        downloaded_size_delta: delta,
                         downloaded_size: bytes_amount,
                         total_size: download.total_size,
                         all_done: false,
@@ -379,12 +381,7 @@ impl<D: Networkable + Send + 'static> DownloadManager<D> {
             })),
         };
         match &event {
-            Some(DownloadManagerEvent::Update(DownloadUpdate {
-                all_done,
-                downloaded_size,
-                ..
-            })) if *all_done => {
-                download.last_offset = *downloaded_size;
+            Some(DownloadManagerEvent::Update(DownloadUpdate { all_done, .. })) if *all_done => {
                 let removed = downloads.swap_remove(index);
                 trace!(
                     "Since download is complete, removing it: idx {index}, hash {}",

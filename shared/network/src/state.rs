@@ -66,10 +66,6 @@ impl BandwidthTracker {
         }
     }
 
-    pub fn get_bandwidth_by_node(&self, id: &EndpointId) -> Option<f64> {
-        self.events.get(id).map(endpoint_bandwidth)
-    }
-
     pub fn get_total_bandwidth(&self) -> f64 {
         self.events.values().map(endpoint_bandwidth).sum()
     }

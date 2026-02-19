@@ -622,16 +622,10 @@ where
 
         // add all tracked connections
         for conn_data in self.connection_monitor.get_all_connections() {
-            let bandwidth = self
-                .state
-                .bandwidth_tracker
-                .get_bandwidth_by_node(&conn_data.endpoint_id)
-                .unwrap_or_default();
-
             infos.push(P2PEndpointInfo {
                 id: conn_data.endpoint_id,
                 path: conn_data.connection_type,
-                bandwidth,
+                bandwidth: conn_data.bandwidth,
                 latency: conn_data.latency.as_secs_f64(),
             });
         }
@@ -715,6 +709,10 @@ where
         }
         None
     }
+    pub fn connection_monitor(&self) -> ConnectionMonitor {
+        self.connection_monitor.clone()
+    }
+
     pub fn router(&self) -> Arc<Router> {
         self.router.clone()
     }
