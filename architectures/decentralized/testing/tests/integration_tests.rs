@@ -678,10 +678,18 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
     loop {
         tokio::select! {
             _ = liveness_check_interval.tick() => {
-                // Check container health before intentional kill phase
+                // Check container health to detect silent crashes.
+                // Before kill: check initial 2 containers.
+                // After kill+respawn: check new containers (3 and 4).
                 if !has_checked_p2p_checkpoint {
                     if let Err(e) = watcher.monitor_clients_health(2).await {
-                        panic!("Client crashed: {}", e);
+                        panic!("Client crashed before checkpoint test: {}", e);
+                    }
+                } else if has_spawned_new_client_yet {
+                    for i in 3..=4 {
+                        if let Err(e) = watcher.monitor_client_health_by_id(&format!("{CLIENT_CONTAINER_PREFIX}-{i}")).await {
+                            panic!("New client crashed after respawn: {}", e);
+                        }
                     }
                 }
 
