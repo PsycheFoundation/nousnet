@@ -603,11 +603,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                         }
                         Some(param_blob_tickets) = rx_params_download.recv() => {
                             let (ticket, request_type) = param_blob_tickets;
-                                let kind = DownloadType::ModelSharing(request_type.clone());
-                                metrics.record_download_started(ticket.hash(), kind.kind());
-                                if let ModelRequestType::Parameter(parameter_name) = request_type {
-                                    p2p.start_download(ticket, Tag::from(format!("model-{parameter_name}")), kind);
-                                }
+                            let kind = DownloadType::ModelSharing(request_type.clone());
+                            metrics.record_download_started(ticket.hash(), kind.kind());
+                            if let ModelRequestType::Parameter(parameter_name) = request_type {
+                                p2p.start_download(ticket, Tag::from(format!("model-{parameter_name}")), kind);
+                            }
                         }
                         Some(config_blob_ticket) = rx_config_download.recv() => {
                             let kind = DownloadType::ModelSharing(ModelRequestType::Config);

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::{Duration, Instant},
+};
 
 use iroh_blobs::{Hash, api::Tag, ticket::BlobTicket};
 use tokio::sync::{mpsc, oneshot};
@@ -6,7 +9,6 @@ use tracing::info;
 
 use super::manager::DownloadType;
 use crate::ModelRequestType;
-use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
@@ -308,51 +310,42 @@ impl DownloadSchedulerActor {
             }
 
             SchedulerMessage::GetDueConfigRetries { response } => {
-                let due_hashes: Vec<Hash> = self
-                    .retry_entries
-                    .iter()
-                    .filter(|(_, entry)| {
-                        matches!(
-                            &entry.download_type,
-                            DownloadType::ModelSharing(ModelRequestType::Config)
-                        )
-                    })
-                    .map(|(hash, _)| *hash)
-                    .collect();
-
-                let mut ready_retries = Vec::new();
-                for hash in due_hashes {
-                    if let Some(entry) = self.retry_entries.remove(&hash) {
-                        ready_retries.push(entry.into_ready_retry(hash));
-                    }
-                }
-
-                let _ = response.send(ready_retries);
+                let retries = self.drain_retries(|entry| {
+                    matches!(
+                        &entry.download_type,
+                        DownloadType::ModelSharing(ModelRequestType::Config)
+                    )
+                });
+                let _ = response.send(retries);
             }
 
             SchedulerMessage::GetDueDistroRetries { response } => {
                 let now = Instant::now();
-                let mut ready_retries = Vec::new();
-
-                let due_hashes: Vec<Hash> = self
-                    .retry_entries
-                    .iter()
-                    .filter(|(_, entry)| {
-                        matches!(&entry.download_type, DownloadType::DistroResult(_))
-                            && entry.retry_time.map(|t| now >= t).unwrap_or(false)
-                    })
-                    .map(|(hash, _)| *hash)
-                    .collect();
-
-                for hash in due_hashes {
-                    if let Some(entry) = self.retry_entries.remove(&hash) {
-                        ready_retries.push(entry.into_ready_retry(hash));
-                    }
-                }
-
-                let _ = response.send(ready_retries);
+                let retries = self.drain_retries(|entry| {
+                    matches!(&entry.download_type, DownloadType::DistroResult(_))
+                        && entry.retry_time.map(|t| now >= t).unwrap_or(false)
+                });
+                let _ = response.send(retries);
             }
         }
+    }
+
+    fn drain_retries(&mut self, predicate: impl Fn(&RetryEntry) -> bool) -> Vec<ReadyRetry> {
+        let due_hashes: Vec<Hash> = self
+            .retry_entries
+            .iter()
+            .filter(|(_, entry)| predicate(entry))
+            .map(|(hash, _)| *hash)
+            .collect();
+
+        due_hashes
+            .into_iter()
+            .filter_map(|hash| {
+                self.retry_entries
+                    .remove(&hash)
+                    .map(|entry| entry.into_ready_retry(hash))
+            })
+            .collect()
     }
 
     fn notify_next_waiter(&mut self) {
