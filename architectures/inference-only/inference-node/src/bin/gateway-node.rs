@@ -38,7 +38,7 @@ const ASSIGNMENTS_FILE: &str = "/tmp/psyche-gateway-assignments.json";
 /// Load model assignments from disk
 fn load_assignments(path: &str) -> HashMap<EndpointId, String> {
     match fs::read_to_string(path) {
-        Ok(contents) => match serde_json::from_str(&contents) {
+        Ok(contents) => match serde_json::from_str::<HashMap<EndpointId, String>>(&contents) {
             Ok(assignments) => {
                 info!(
                     "Loaded {} model assignments from {}",
@@ -376,7 +376,7 @@ async fn handle_assign_models(
         // Find idle nodes (not currently assigned)
         let idle_nodes: Vec<EndpointId> = nodes
             .keys()
-            .filter(|node_id| !assignments.contains_key(node_id))
+            .filter(|node_id| !assignments.contains_key(*node_id))
             .copied()
             .take(spec.num_nodes)
             .collect();
@@ -467,11 +467,39 @@ async fn handle_get_assignments(
 
     for (node_id, assigned_model) in assignments.iter() {
         let status = match nodes.get(node_id) {
-            None => "offline".to_string(),
+            None => {
+                info!(
+                    "Node {} not in available_nodes (offline)",
+                    node_id.fmt_short()
+                );
+                "offline".to_string()
+            }
             Some(node_info) => match &node_info.model_name {
-                None => "idle".to_string(),
-                Some(current_model) if current_model == assigned_model => "loaded".to_string(),
-                Some(_) => "loading".to_string(), // Has different model, probably loading
+                None => {
+                    info!(
+                        "Node {} has no model loaded (assigned: {})",
+                        node_id.fmt_short(),
+                        assigned_model
+                    );
+                    "idle".to_string()
+                }
+                Some(current_model) if current_model == assigned_model => {
+                    info!(
+                        "Node {} loaded correct model: {}",
+                        node_id.fmt_short(),
+                        current_model
+                    );
+                    "loaded".to_string()
+                }
+                Some(current_model) => {
+                    info!(
+                        "Node {} has model '{}' but assigned model is '{}'",
+                        node_id.fmt_short(),
+                        current_model,
+                        assigned_model
+                    );
+                    "loading".to_string() // Has different model, probably loading
+                }
             },
         };
 
