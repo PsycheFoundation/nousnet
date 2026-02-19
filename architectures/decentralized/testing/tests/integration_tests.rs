@@ -262,7 +262,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                match response {
                      Some(Response::Loss(_client, epoch, step, _loss)) => {
                           if epoch == 1 && step > 22 {
-                               panic!("Second epoch started and the clients did not get the model");
+                               panic!("DELETE ME Second epoch started and the clients did not get the model");
                           }
                      }
                      Some(Response::LoadedModel(checkpoint)) => {
