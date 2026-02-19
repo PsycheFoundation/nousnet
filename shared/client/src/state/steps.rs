@@ -3,11 +3,10 @@ use crate::{
     state::{train::FinishedTrainers, types::DeserializeError},
 };
 
-use chrono::Utc;
 use iroh_blobs::api::Tag;
 use psyche_coordinator::{Committee, Coordinator, RunState, Witness, WitnessProof};
 use psyche_core::{MerkleRoot, MerkleTree, NodeIdentity, sha256};
-use psyche_event_sourcing::{event, train};
+use psyche_event_sourcing::event;
 use psyche_modeling::{DistroResult, Trainer};
 use psyche_network::{
     AuthenticatableIdentity, BlobTicket, Hash, P2PEndpointInfo, TransmittableDistroResult,

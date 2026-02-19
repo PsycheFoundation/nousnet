@@ -1,5 +1,4 @@
 use crate::{WandBInfo, fetch_data::DataFetcher};
-use chrono::Utc;
 use psyche_coordinator::{
     Coordinator, HealthChecks,
     model::{self, HttpLLMTrainingDataLocation, LLMTrainingDataLocation},
@@ -10,7 +9,7 @@ use psyche_data_provider::{
     WeightedDataProvider, download_dataset_repo_async, download_model_repo_async,
     http::{FileURLs, HttpDataProvider},
 };
-use psyche_event_sourcing::{event, warmup};
+use psyche_event_sourcing::event;
 use psyche_metrics::ClientMetrics;
 use psyche_modeling::{
     AttentionImplementation, AutoConfig, AutoTokenizerError, CausalLM, CommunicatorId,

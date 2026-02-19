@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use derive_more::From;
 use first_class_variants::first_class_variants;
 use iroh::EndpointId as IrohEndpointId;
 use iroh_blobs::Hash as IrohHash;
@@ -111,7 +110,7 @@ pub struct Event {
 pub enum EventData {
     RunStarted(RunStarted),
     EpochStarted(EpochStarted),
-    Coordinator(CoordinatorEvent),
+    Coordinator(Coordinator),
     Client(Client),
     P2P(P2P),
     Train(Train),
@@ -145,20 +144,22 @@ impl From<EpochStarted> for EventData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, From)]
-pub enum CoordinatorEvent {
-    StateChanged(CoordinatorStateChanged),
+#[first_class_variants(
+    module = "coordinator",
+    impl_into_parent = "EventData",
+    derive(Debug, Clone, Serialize, Deserialize)
+)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Coordinator {
+    CoordinatorStateChanged {
+        new_state_hash: String,
+    },
     SolanaSubscriptionChanged {
         url: String,
         status: SubscriptionStatus,
     },
     // TODO: we submitted an RPC call
     // TODO: rpc call success/fail
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoordinatorStateChanged {
-    pub new_state_hash: String,
 }
 
 #[first_class_variants(

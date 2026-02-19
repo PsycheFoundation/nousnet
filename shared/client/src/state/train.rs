@@ -3,14 +3,13 @@ use crate::{
     state::types::{DeserializeError, PayloadState},
 };
 
-use chrono::Utc;
 use futures::{StreamExt, future::try_join_all, stream::FuturesUnordered};
 use psyche_coordinator::{
     BLOOM_FALSE_RATE, Commitment, CommitteeSelection, Coordinator, CoordinatorError, HealthChecks,
     assign_data_for_state, get_batch_ids_for_node, get_batch_ids_for_round, model,
 };
 use psyche_core::{BatchId, Bloom, NodeIdentity, OptimizerDefinition};
-use psyche_event_sourcing::{client, event, train};
+use psyche_event_sourcing::event;
 use psyche_modeling::{
     ApplyDistroResultError, Batch, BatchData, DistroResult, TrainOutput, Trainer,
     TrainerThreadCommunicationError,

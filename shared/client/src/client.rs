@@ -5,12 +5,11 @@ use crate::{
 };
 use anyhow::anyhow;
 use anyhow::{Error, Result, bail};
-use chrono::Utc;
 use futures::future::join_all;
 use iroh::protocol::Router;
 use psyche_coordinator::{Commitment, CommitteeSelection, Coordinator, RunState};
 use psyche_core::NodeIdentity;
-use psyche_event_sourcing::{client, event};
+use psyche_event_sourcing::event;
 
 fn to_event_run_state(state: RunState) -> psyche_event_sourcing::RunState {
     match state {
