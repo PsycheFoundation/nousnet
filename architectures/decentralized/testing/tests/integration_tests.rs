@@ -678,6 +678,13 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
     loop {
         tokio::select! {
             _ = liveness_check_interval.tick() => {
+                // Check container health before intentional kill phase
+                if !has_checked_p2p_checkpoint {
+                    if let Err(e) = watcher.monitor_clients_health(2).await {
+                        panic!("Client crashed: {}", e);
+                    }
+                }
+
                 // Show number of connected clients and current state of coordinator
                 let clients = solana_client.get_clients().await;
                 let current_epoch = solana_client.get_current_epoch().await;
