@@ -375,8 +375,9 @@ async fn disconnect_client() {
     let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
     let mut watcher = DockerWatcher::new(docker.clone());
 
-    // Initialize a Solana run with 3 clients
-    let _cleanup = e2e_testing_setup(docker.clone(), 3).await;
+    // Initialize a Solana run with 3 clients, min_clients=2 so the run can
+    // continue after killing one client (giving time for 2+ health checks)
+    let _cleanup = e2e_testing_setup_with_min(docker.clone(), 3, 2, None).await;
 
     let _monitor_client_1 = watcher
         .monitor_container(
@@ -421,119 +422,128 @@ async fn disconnect_client() {
     let mut seen_health_checks: Vec<u64> = Vec::new();
     let mut untrained_batches: Vec<Vec<u64>> = Vec::new();
     let mut killed_client = false;
+    let mut liveness_check_interval = time::interval(Duration::from_secs(10));
 
     loop {
-        // Timeout of 3 min, instead of hanging just crash the test
-        let response = match time::timeout(
-            Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
-            watcher.log_rx.recv(),
-        )
-        .await
-        {
-            Ok(Some(response)) => response,
-            Ok(None) => {
-                panic!("Log channel closed unexpectedly");
-            }
-            Err(_) => {
-                let state = solana_client.get_run_state().await;
-                let epoch = solana_client.get_current_epoch().await;
-                let step = solana_client.get_last_step().await;
-                panic!(
-                    "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
-                );
-            }
-        };
-
-        match response {
-            Response::StateChange(_timestamp, client_id, old_state, new_state, epoch, step) => {
-                println!(
-                    "epoch: {epoch} step: {step} state change client {client_id} - {old_state} => {new_state}"
-                );
-
-                if step == 20 {
-                    println!("Max number of epochs reached for test");
-                    break;
-                }
-
-                if old_state == RunState::WaitingForMembers.to_string() {
-                    let epoch_clients = solana_client.get_current_epoch_clients().await;
-                    println!(
-                        "Starting epoch: {} with {} clients",
-                        epoch,
-                        epoch_clients.len()
-                    );
-                }
-
-                if killed_client
-                    && epoch > 0
-                    && new_state == RunState::WaitingForMembers.to_string()
-                {
-                    println!(
-                        "Epoch ended after killing client, seen {} health checks so far",
-                        seen_health_checks.len()
-                    );
-                }
-
-                if epoch == 0
-                    && step == 1
-                    && old_state == RunState::RoundTrain.to_string()
-                    && !killed_client
-                {
-                    let epoch_clients = solana_client.get_current_epoch_clients().await;
-                    assert_eq!(epoch_clients.len(), 3);
-
-                    // Kill any client, since all are witnesses
-                    watcher
-                        .kill_container(&format!("{CLIENT_CONTAINER_PREFIX}-1"))
-                        .await
-                        .unwrap();
-                    println!("Killed client: {CLIENT_CONTAINER_PREFIX}-1");
-                    killed_client = true;
-                }
-
-                if killed_client
-                    && seen_health_checks.len() >= 2
-                    && new_state == RunState::Cooldown.to_string()
-                {
-                    let epoch_clients = solana_client.get_current_epoch_clients().await;
-                    assert!(
-                        epoch_clients.len() <= 2,
-                        "Expected at most 2 clients after kill, got {}",
-                        epoch_clients.len()
-                    );
-                    break;
+        tokio::select! {
+            _ = liveness_check_interval.tick() => {
+                if let Err(e) = watcher.monitor_clients_health(3).await {
+                    println!("Client crash detected: {}", e);
                 }
             }
+            result = async {
+                time::timeout(
+                    Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
+                    watcher.log_rx.recv(),
+                ).await
+            } => {
+                let response = match result {
+                    Ok(Some(response)) => response,
+                    Ok(None) => {
+                        panic!("Log channel closed unexpectedly");
+                    }
+                    Err(_) => {
+                        let state = solana_client.get_run_state().await;
+                        let epoch = solana_client.get_current_epoch().await;
+                        let step = solana_client.get_last_step().await;
+                        panic!(
+                            "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+                        );
+                    }
+                };
 
-            // track HealthChecks sent
-            Response::HealthCheck(unhealthy_client_id, _index, current_step) => {
-                println!("found unhealthy client: {unhealthy_client_id:?}");
+                match response {
+                    Response::StateChange(_timestamp, client_id, old_state, new_state, epoch, step) => {
+                        println!(
+                            "epoch: {epoch} step: {step} state change client {client_id} - {old_state} => {new_state}"
+                        );
 
-                let clients_ids: Vec<String> = solana_client
-                    .get_clients()
-                    .await
-                    .iter()
-                    .map(|client| client.id.to_string())
-                    .collect();
-                seen_health_checks.push(current_step);
-                assert!(clients_ids.contains(&unhealthy_client_id));
+                        if step == 20 {
+                            println!("Max number of epochs reached for test");
+                            break;
+                        }
 
-                if killed_client && seen_health_checks.len() >= 2 {
-                    println!(
-                        "Seen {} health checks after kill, exiting",
-                        seen_health_checks.len()
-                    );
-                    break;
+                        if old_state == RunState::WaitingForMembers.to_string() {
+                            let epoch_clients = solana_client.get_current_epoch_clients().await;
+                            println!(
+                                "Starting epoch: {} with {} clients",
+                                epoch,
+                                epoch_clients.len()
+                            );
+                        }
+
+                        if killed_client
+                            && epoch > 0
+                            && new_state == RunState::WaitingForMembers.to_string()
+                        {
+                            println!(
+                                "Epoch ended after killing client, seen {} health checks so far",
+                                seen_health_checks.len()
+                            );
+                        }
+
+                        if epoch == 0
+                            && step == 1
+                            && old_state == RunState::RoundTrain.to_string()
+                            && !killed_client
+                        {
+                            let epoch_clients = solana_client.get_current_epoch_clients().await;
+                            assert_eq!(epoch_clients.len(), 3);
+
+                            // Kill any client, since all are witnesses
+                            watcher
+                                .kill_container(&format!("{CLIENT_CONTAINER_PREFIX}-1"))
+                                .await
+                                .unwrap();
+                            println!("Killed client: {CLIENT_CONTAINER_PREFIX}-1");
+                            killed_client = true;
+                        }
+
+                        if killed_client
+                            && seen_health_checks.len() >= 2
+                            && new_state == RunState::Cooldown.to_string()
+                        {
+                            let epoch_clients = solana_client.get_current_epoch_clients().await;
+                            assert!(
+                                epoch_clients.len() <= 2,
+                                "Expected at most 2 clients after kill, got {}",
+                                epoch_clients.len()
+                            );
+                            break;
+                        }
+                    }
+
+                    // track HealthChecks sent
+                    Response::HealthCheck(unhealthy_client_id, _index, current_step) => {
+                        println!("found unhealthy client: {unhealthy_client_id:?}");
+
+                        let clients_ids: Vec<String> = solana_client
+                            .get_clients()
+                            .await
+                            .iter()
+                            .map(|client| client.id.to_string())
+                            .collect();
+                        seen_health_checks.push(current_step);
+                        assert!(clients_ids.contains(&unhealthy_client_id));
+
+                        if killed_client && seen_health_checks.len() >= 2 {
+                            println!(
+                                "Seen {} health checks after kill, exiting",
+                                seen_health_checks.len()
+                            );
+                            break;
+                        }
+                    }
+
+                    // track untrained batches
+                    Response::UntrainedBatches(untrained_batch_ids) => {
+                        println!("untrained_batch_ids: {untrained_batch_ids:?}");
+                        untrained_batches.push(untrained_batch_ids);
+                    }
+
+                    _ => {}
                 }
             }
-
-            // track untrained batches
-            Response::UntrainedBatches(untrained_batch_ids) => {
-                println!("untrained_batch_ids: {untrained_batch_ids:?}");
-                untrained_batches.push(untrained_batch_ids);
-            }
-
-            _ => {}
         }
     }
 
@@ -1091,7 +1101,6 @@ async fn test_pause_and_resume_run() {
         .unwrap();
 
     let mut paused = false;
-    let mut client_killed = false;
     let mut rejoined_client = false;
     let mut current_epoch = -1;
     let mut last_epoch_loss = f64::MAX;
@@ -1123,7 +1132,6 @@ async fn test_pause_and_resume_run() {
 
                     // Kill the old container
                     watcher.kill_container(&container).await.unwrap();
-                    client_killed = true;
 
                     // Wait a moment for cleanup
                     tokio::time::sleep(Duration::from_secs(2)).await;
