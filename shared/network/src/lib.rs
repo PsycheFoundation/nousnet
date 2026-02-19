@@ -676,12 +676,9 @@ where
         &mut self,
         update: DownloadUpdate,
     ) -> Option<NetworkEvent<BroadcastMessage, Download>> {
-        let bw_tracker = self.state.bandwidth_tracker.clone();
-        let from = update.blob_ticket.addr().id;
-        let num_bytes = update.downloaded_size_delta;
-        tokio::spawn(async move {
-            bw_tracker.add_event(from, num_bytes).await;
-        });
+        self.state
+            .bandwidth_tracker
+            .add_event(update.blob_ticket.addr().id, update.downloaded_size_delta);
 
         let hash = update.blob_ticket.hash();
 
@@ -825,7 +822,7 @@ async fn on_update_stats(
 
     stats
         .bandwidth_history
-        .push_back(stats.bandwidth_tracker.get_total_bandwidth().await);
+        .push_back(stats.bandwidth_tracker.get_total_bandwidth());
     const BANDWIDTH_GRAPH_SIZE: usize = 60;
     if stats.bandwidth_history.len() > BANDWIDTH_GRAPH_SIZE {
         stats.bandwidth_history.pop_front();

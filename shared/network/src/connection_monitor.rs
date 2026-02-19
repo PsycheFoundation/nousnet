@@ -14,7 +14,7 @@ pub struct ConnectionData {
     pub endpoint_id: EndpointId,
     pub connection_type: ConnectionType,
     pub latency: Duration,
-    /// Measured throughput in bytes/sec from QUIC transport stats
+    /// Throughput in bytes/sec
     pub bandwidth: f64,
 }
 
@@ -171,10 +171,6 @@ impl ConnectionMonitor {
                                             );
                                         }
                                     }
-
-                                    // Don't remove the entry — keep last known
-                                    // bandwidth/latency for peer selection.
-                                    // New connections will update the data.
                                     break;
                                 }
                             }
