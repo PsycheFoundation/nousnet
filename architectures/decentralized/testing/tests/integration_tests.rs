@@ -27,11 +27,10 @@ use rstest::*;
 use serial_test::serial;
 use tokio::time;
 
-/// Dump the last N lines of logs from all test containers (clients, proxies, validator).
+/// Dump the last N lines of logs from all test client containers.
 /// Call this at the end of tests to aid debugging CI failures.
+/// Each container log fetch has a 10s timeout to prevent hanging.
 async fn dump_all_container_logs(docker: &Arc<Docker>, watcher: &DockerWatcher, tail: usize) {
-    use psyche_decentralized_testing::VALIDATOR_CONTAINER_PREFIX;
-
     let containers = docker
         .list_containers::<String>(Some(bollard::container::ListContainersOptions {
             all: true,
@@ -43,15 +42,24 @@ async fn dump_all_container_logs(docker: &Arc<Docker>, watcher: &DockerWatcher, 
     for cont in containers {
         if let Some(names) = &cont.names {
             if let Some(name) = names.first() {
-                let name = name.trim_start_matches('/');
-                if name.starts_with(CLIENT_CONTAINER_PREFIX)
-                    || name.starts_with(NGINX_PROXY_PREFIX)
-                    || name.starts_with(VALIDATOR_CONTAINER_PREFIX)
+                let name = name.trim_start_matches('/').to_string();
+                if name.starts_with(CLIENT_CONTAINER_PREFIX) || name.starts_with(NGINX_PROXY_PREFIX)
                 {
-                    let logs = watcher.fetch_container_logs(name, tail).await;
-                    eprintln!("\n========== Last {tail} lines from {name} ==========");
-                    eprintln!("{}", logs);
-                    eprintln!("========== End of logs from {name} ==========\n");
+                    match tokio::time::timeout(
+                        Duration::from_secs(10),
+                        watcher.fetch_container_logs(&name, tail),
+                    )
+                    .await
+                    {
+                        Ok(logs) => {
+                            eprintln!("\n========== Last {tail} lines from {name} ==========");
+                            eprintln!("{}", logs);
+                            eprintln!("========== End of logs from {name} ==========\n");
+                        }
+                        Err(_) => {
+                            eprintln!("========== Timeout fetching logs from {name} ==========");
+                        }
+                    }
                 }
             }
         }
