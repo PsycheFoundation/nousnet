@@ -364,7 +364,7 @@ impl DockerWatcher {
     }
 
     /// Fetch the last N lines of logs from a container
-    async fn fetch_container_logs(&self, container_name: &str, tail: usize) -> String {
+    pub async fn fetch_container_logs(&self, container_name: &str, tail: usize) -> String {
         let log_options = Some(LogsOptions::<String> {
             stderr: true,
             stdout: true,
