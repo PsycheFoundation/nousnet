@@ -22,6 +22,7 @@ pub use p2p_model_sharing::{
     MODEL_REQUEST_TIMEOUT_SECS, ModelConfigSharingMessage, ParameterSharingMessage,
     PeerManagerHandle,
 };
+use psyche_event_sourcing::event;
 use psyche_metrics::{ClientMetrics, PeerConnection};
 use router::{SupportedProtocols, spawn_router_with_allowlist};
 use state::State;
@@ -855,14 +856,23 @@ fn parse_gossip_event<BroadcastMessage: Networkable>(
             let peers: Vec<_> = gossip.neighbors().collect();
             debug!(name: "gossip_new_peer", endpoint_id=%endpoint_id, all_gossip_peers = ?peers, "gossip connected to new peer {endpoint_id}, we now have {} peers", peers.len());
             metrics.update_p2p_gossip_neighbors(&peers);
+            event!(p2p::GossipNeighborsChanged {
+                new_neighbors: vec![EndpointId(endpoint_id)],
+                removed_neighbors: vec![]
+            });
         }
         Ok(iroh_gossip::api::Event::NeighborDown(endpoint_id)) => {
             let peers: Vec<_> = gossip.neighbors().collect();
             debug!(name: "gossip_lost_peer", endpoint_id=%endpoint_id, all_gossip_peers = ?peers, "gossip disconnected from peer {endpoint_id}, we now have {} peers", peers.len());
             metrics.update_p2p_gossip_neighbors(&peers);
+            event!(p2p::GossipNeighborsChanged {
+                new_neighbors: vec![],
+                removed_neighbors: vec![EndpointId(endpoint_id)]
+            });
         }
         Ok(iroh_gossip::api::Event::Lagged) => {
-            error!(name: "gossip_lagged","Gossip lagged. We missed some events.")
+            error!(name: "gossip_lagged","Gossip lagged. We missed some events.");
+            event!(p2p::GossipLagged);
         }
         Err(err) => {
             warn!("Error on gossip event RX: {err}");

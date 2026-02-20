@@ -2,11 +2,12 @@ use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use psyche_coordinator::{RunState, model::Checkpoint};
 use psyche_core::BatchId;
+use psyche_metrics::SelectedPath;
 use std::collections::{BTreeMap, HashSet};
 
 use crate::events::{
-    Client, ConnectionPath, Cooldown, EndpointId, ErrorKind, Event, EventData, P2P,
-    ResourceSnapshot, Tag, Train, Warmup,
+    Client, Cooldown, EndpointId, ErrorKind, Event, EventData, P2P, ResourceSnapshot, Tag, Train,
+    Warmup,
 };
 
 // ── Tag helpers ───────────────────────────────────────────────────────────────
@@ -85,7 +86,7 @@ pub struct WarmupSnapshot {
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
     /// Whether we're talking to this peer directly or via a relay.
-    pub connection_path: ConnectionPath,
+    pub connection_path: Option<SelectedPath>,
     pub latency_ms: Option<u64>,
 }
 
@@ -468,6 +469,9 @@ impl ClusterProjection {
                         for added in &gnc.new_neighbors {
                             node.p2p.gossip_neighbors.insert(added.clone());
                         }
+                    }
+                    P2P::GossipLagged(_) => {
+                        // nothing
                     }
                     P2P::ConnectionLatencyChanged(clc) => {
                         if let Some(peer) = node.p2p.peers.get_mut(&clc.endpoint_id) {
@@ -933,7 +937,6 @@ mod tests {
     #[test]
     fn test_p2p_gossip_neighbors() {
         use crate::events::p2p;
-        use std::collections::HashSet;
 
         let mut proj = ClusterProjection::new();
         let node_id = "node-7";
@@ -945,8 +948,8 @@ mod tests {
             node_id,
             &make_event(EventData::P2P(crate::events::P2P::GossipNeighborsChanged(
                 p2p::GossipNeighborsChanged {
-                    removed_neighbors: HashSet::new(),
-                    new_neighbors: HashSet::from([ep1.clone(), ep2.clone()]),
+                    removed_neighbors: vec![],
+                    new_neighbors: vec![ep1.clone(), ep2.clone()],
                 },
             ))),
         );
@@ -959,8 +962,8 @@ mod tests {
             node_id,
             &make_event(EventData::P2P(crate::events::P2P::GossipNeighborsChanged(
                 p2p::GossipNeighborsChanged {
-                    removed_neighbors: HashSet::from([ep1.clone()]),
-                    new_neighbors: HashSet::new(),
+                    removed_neighbors: vec![ep1.clone()],
+                    new_neighbors: vec![],
                 },
             ))),
         );

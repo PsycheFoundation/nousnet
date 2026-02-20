@@ -6,10 +6,7 @@ use chrono::{DateTime, Utc};
 
 use std::collections::BTreeMap;
 
-use crate::events::{
-    Client, Cooldown, Coordinator as CoordinatorEvent, CoordinatorRecord, Event, EventData, P2P,
-    Train, Warmup,
-};
+use crate::events::{CoordinatorRecord, Event};
 use crate::projection::{ClusterProjection, ClusterSnapshot, CoordinatorStateSnapshot};
 use crate::store::try_decode_cobs_frame;
 
@@ -57,74 +54,11 @@ impl TimelineEntry {
         }
     }
 
-    pub fn event_name(&self) -> &'static str {
+    pub fn event_name(&self) -> String {
         match self {
-            TimelineEntry::Coordinator { .. } => "Coordinator::Update",
-            TimelineEntry::Node { event, .. } => event_data_name(&event.data),
+            TimelineEntry::Coordinator { .. } => "coordinator update".to_string(),
+            TimelineEntry::Node { event, .. } => event.data.to_string(),
         }
-    }
-}
-
-fn event_data_name(data: &EventData) -> &'static str {
-    match data {
-        EventData::RunStarted(_) => "RunStarted",
-        EventData::EpochStarted(_) => "EpochStarted",
-        EventData::Coordinator(c) => match c {
-            CoordinatorEvent::CoordinatorStateChanged(_) => "Coordinator::StateChanged",
-            CoordinatorEvent::SolanaSubscriptionChanged(_) => "Coordinator::SubscriptionChanged",
-        },
-        EventData::Client(c) => match c {
-            Client::StateChanged(_) => "Client::StateChanged",
-            Client::HealthCheckFailed(_) => "Client::HealthCheckFailed",
-            Client::ErrorOccurred(_) => "Client::ErrorOccurred",
-        },
-        EventData::P2P(p) => match p {
-            P2P::ConnectionChanged(_) => "P2P::ConnectionChanged",
-            P2P::GossipNeighborsChanged(_) => "P2P::GossipNeighborsChanged",
-            P2P::ConnectionLatencyChanged(_) => "P2P::LatencyChanged",
-            P2P::BlobAddedToStore(_) => "P2P::BlobAddedToStore",
-            P2P::BlobUploadStarted(_) => "P2P::BlobUploadStarted",
-            P2P::BlobUploadProgress(_) => "P2P::BlobUploadProgress",
-            P2P::BlobUploadCompleted(_) => "P2P::BlobUploadCompleted",
-            P2P::BlobDownloadStarted(_) => "P2P::BlobDownloadStarted",
-            P2P::BlobDownloadProgress(_) => "P2P::BlobDownloadProgress",
-            P2P::BlobDownloadCompleted(_) => "P2P::BlobDownloadCompleted",
-            P2P::GossipMessageSent(_) => "P2P::GossipMessageSent",
-            P2P::GossipMessageReceived(_) => "P2P::GossipMessageReceived",
-        },
-        EventData::Train(t) => match t {
-            Train::BatchesAssigned(_) => "Train::BatchesAssigned",
-            Train::BatchDataDownloadStart(_) => "Train::BatchDataDownloadStart",
-            Train::BatchDataDownloadProgress(_) => "Train::BatchDataDownloadProgress",
-            Train::BatchDataDownloadComplete(_) => "Train::BatchDataDownloadComplete",
-            Train::TrainingStarted(_) => "Train::TrainingStarted",
-            Train::TrainingFinished(_) => "Train::TrainingFinished",
-            Train::UntrainedBatchWarning(_) => "Train::UntrainedBatchWarning",
-            Train::WitnessElected(_) => "Train::WitnessElected",
-            Train::DistroResultDeserializeStarted(_) => "Train::DistroDeserializeStarted",
-            Train::DistroResultDeserializeComplete(_) => "Train::DistroDeserializeComplete",
-            Train::ApplyDistroResultsStart(_) => "Train::ApplyDistroResultsStart",
-            Train::ApplyDistroResultsComplete(_) => "Train::ApplyDistroResultsComplete",
-        },
-        EventData::Warmup(w) => match w {
-            Warmup::P2PParamInfoRequest(_) => "Warmup::P2PParamInfoRequest",
-            Warmup::P2PParamInfoResponse(_) => "Warmup::P2PParamInfoResponse",
-            Warmup::CheckpointDownloadStarted(_) => "Warmup::CheckpointDownloadStarted",
-            Warmup::CheckpointDownloadProgress(_) => "Warmup::CheckpointDownloadProgress",
-            Warmup::CheckpointDownloadComplete(_) => "Warmup::CheckpointDownloadComplete",
-            Warmup::ModelLoadStarted(_) => "Warmup::ModelLoadStarted",
-            Warmup::ModelLoadComplete(_) => "Warmup::ModelLoadComplete",
-        },
-        EventData::Cooldown(c) => match c {
-            Cooldown::ModelSerializationStarted(_) => "Cooldown::SerializationStarted",
-            Cooldown::ModelSerializationFinished(_) => "Cooldown::SerializationFinished",
-            Cooldown::CheckpointWriteStarted(_) => "Cooldown::CheckpointWriteStarted",
-            Cooldown::CheckpointWriteFinished(_) => "Cooldown::CheckpointWriteFinished",
-            Cooldown::CheckpointUploadStarted(_) => "Cooldown::UploadStarted",
-            Cooldown::CheckpointUploadProgress(_) => "Cooldown::UploadProgress",
-            Cooldown::CheckpointUploadFinished(_) => "Cooldown::UploadFinished",
-        },
-        EventData::ResourceSnapshot(_) => "ResourceSnapshot",
     }
 }
 

@@ -30,9 +30,9 @@ impl<'a> Widget for NodeWidget<'a> {
 
         let Some((id, node)) = node_entry else {
             let msg = if self.selected_node_idx.is_none() {
-                "Use ↑/↓ to select a node"
+                "\nUse ↑/↓ to select a node"
             } else {
-                "No nodes"
+                "\nNo nodes"
             };
             Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
                 .centered()

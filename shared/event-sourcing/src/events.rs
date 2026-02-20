@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
+use derive_more::Display;
 use first_class_variants::first_class_variants;
 use iroh::EndpointId as IrohEndpointId;
 use iroh_blobs::Hash as IrohHash;
@@ -11,13 +12,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::bytes_visitor::BytesVisitor;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 pub enum SubscriptionStatus {
     Up,
     Down,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 pub enum ErrorKind {
     InvalidRunState,
     InvalidWitness,
@@ -76,13 +77,19 @@ impl<'de> Deserialize<'de> for Hash {
 }
 
 /// Tags to link related events
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 pub enum Tag {
+    #[display("blob_upload:{_0}")]
     BlobUpload(u64),
+    #[display("blob_download:{_0}")]
     BlobDownload(u64),
+    #[display("batch:{_0:?}")]
     BatchId(BatchId),
+    #[display("blob:{_0:?}")]
     Blob(Hash),
+    #[display("checkpoint_download:{_0}")]
     CheckpointDownload(u64),
+    #[display("event_submission:{_0}")]
     EventSubmission(u64),
 }
 
@@ -93,20 +100,30 @@ pub struct Event {
     pub data: EventData,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum EventData {
+    #[display("{_0}")]
     RunStarted(RunStarted),
+    #[display("{_0}")]
     EpochStarted(EpochStarted),
+    #[display("{_0}")]
     Coordinator(Coordinator),
+    #[display("{_0}")]
     Client(Client),
+    #[display("{_0}")]
     P2P(P2P),
+    #[display("{_0}")]
     Train(Train),
+    #[display("{_0}")]
     Warmup(Warmup),
+    #[display("{_0}")]
     Cooldown(Cooldown),
+    #[display("{_0}")]
     ResourceSnapshot(ResourceSnapshot),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
+#[display("run started: node {node_id} version {psyche_version} run {run_id}")]
 pub struct RunStarted {
     pub run_id: String,
     pub node_id: String,
@@ -120,7 +137,8 @@ impl From<RunStarted> for EventData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
+#[display("epoch {epoch_number} started")]
 pub struct EpochStarted {
     pub epoch_number: u64,
 }
@@ -134,13 +152,13 @@ impl From<EpochStarted> for EventData {
 #[first_class_variants(
     module = "coordinator",
     impl_into_parent = "EventData",
-    derive(Debug, Clone, Serialize, Deserialize)
+    derive(Debug, Clone, Serialize, Deserialize, Display)
 )]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum Coordinator {
-    CoordinatorStateChanged {
-        new_state_hash: String,
-    },
+    #[display("coordinator state changed: {new_state_hash}")]
+    CoordinatorStateChanged { new_state_hash: String },
+    #[display("solana subscription {url}: {status}")]
     SolanaSubscriptionChanged {
         url: String,
         status: SubscriptionStatus,
@@ -152,81 +170,79 @@ pub enum Coordinator {
 #[first_class_variants(
     module = "client",
     impl_into_parent = "EventData",
-    derive(Debug, Clone, Serialize, Deserialize)
+    derive(Debug, Clone, Serialize, Deserialize, Display)
 )]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum Client {
+    #[display("state changed {old_state:?}→{new_state:?} epoch={epoch} step={step}")]
     StateChanged {
         old_state: RunState,
         new_state: RunState,
         epoch: u64,
         step: u64,
     },
-    HealthCheckFailed {
-        index: u64,
-        current_step: u64,
-    },
-    ErrorOccurred {
-        kind: ErrorKind,
-        message: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConnectionPath {
-    Direct,
-    Relayed,
-    Disconnected,
+    #[display("health check failed index={index} step={current_step}")]
+    HealthCheckFailed { index: u64, current_step: u64 },
+    #[display("error ({kind}): {message}")]
+    ErrorOccurred { kind: ErrorKind, message: String },
 }
 
 #[first_class_variants(
     module = "p2p",
     impl_into_parent = "EventData",
-    derive(Debug, Clone, Serialize, Deserialize)
+    derive(Debug, Clone, Serialize, Deserialize, Display)
 )]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum P2P {
+    #[display("connection changed")]
     ConnectionChanged {
         endpoint_id: EndpointId,
-        connection_path: ConnectionPath,
+        connection_path: Option<psyche_metrics::SelectedPath>,
     },
+    #[display("gossip neighbors changed")]
     GossipNeighborsChanged {
-        removed_neighbors: HashSet<EndpointId>,
-        new_neighbors: HashSet<EndpointId>,
+        removed_neighbors: Vec<EndpointId>,
+        new_neighbors: Vec<EndpointId>,
     },
+    #[display("gossip lagged")]
+    GossipLagged,
+    #[display("latency changed: {latency_ms}ms")]
     ConnectionLatencyChanged {
         endpoint_id: EndpointId,
         latency_ms: u64,
     },
-    BlobAddedToStore {
-        hash: Hash,
-    },
+    #[display("blob added to store")]
+    BlobAddedToStore { hash: Hash },
+    #[display("blob upload started: {size_bytes}B retry={retry_number}")]
     BlobUploadStarted {
         to_endpoint_id: EndpointId,
         size_bytes: u64,
         retry_number: u32,
     },
-    BlobUploadProgress {
-        bytes_transferred: u64,
-    },
+    #[display("blob upload progress: {bytes_transferred}B")]
+    BlobUploadProgress { bytes_transferred: u64 },
+    #[display("blob upload completed")]
     BlobUploadCompleted(Result<(), String>),
+    #[display("blob download started: {size_bytes}B retry={retry_number}")]
     BlobDownloadStarted {
         from_endpoint_id: EndpointId,
         size_bytes: u64,
         retry_number: u32,
     },
-    BlobDownloadProgress {
-        bytes_transferred: u64,
-    },
+    #[display("blob download progress: {bytes_transferred}B")]
+    BlobDownloadProgress { bytes_transferred: u64 },
+    #[display("blob download completed: success={success}")]
     BlobDownloadCompleted {
         success: bool,
         error_string: Option<String>,
     },
+    #[display("gossip sent: {message_type} {message_size_bytes}B")]
     GossipMessageSent {
         message_type: String,
         message_size_bytes: u64,
         rebroadcast_count: u32,
     },
+    #[display("gossip received: {message_type} {message_size_bytes}B")]
     GossipMessageReceived {
         message_type: String,
         message_size_bytes: u64,
@@ -236,34 +252,36 @@ pub enum P2P {
 #[first_class_variants(
     module = "train",
     impl_into_parent = "EventData",
-    derive(Debug, Clone, Serialize, Deserialize)
+    derive(Debug, Clone, Serialize, Deserialize, Display)
 )]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum Train {
-    BatchesAssigned {
-        num_batches: u32,
-    },
-    BatchDataDownloadStart {
-        size_bytes: u64,
-    },
-    BatchDataDownloadProgress {
-        bytes_downloaded: u64,
-    },
+    #[display("batches assigned: {num_batches}")]
+    BatchesAssigned { num_batches: u32 },
+    #[display("batch data download start: {size_bytes}B")]
+    BatchDataDownloadStart { size_bytes: u64 },
+    #[display("batch data download progress: {bytes_downloaded}B")]
+    BatchDataDownloadProgress { bytes_downloaded: u64 },
+    #[display("batch data download complete: success={success}")]
     BatchDataDownloadComplete {
         success: bool,
         error_string: Option<String>,
     },
 
+    #[display("training started")]
     TrainingStarted,
+    #[display("training finished: epoch={epoch} step={step} loss={loss:?}")]
     TrainingFinished {
         epoch: u64,
         step: u64,
         loss: Option<f64>,
     },
+    #[display("untrained batch warning")]
     UntrainedBatchWarning {
         batch_id: BatchId,
         expected_trainer: Option<String>,
     },
+    #[display("witness elected: step={step} round={round} epoch={epoch}")]
     WitnessElected {
         step: u64,
         round: u64,
@@ -272,61 +290,76 @@ pub enum Train {
         committee_position: u64,
     },
 
+    #[display("distro result deserialize started")]
     DistroResultDeserializeStarted,
+    #[display("distro result deserialize complete")]
     DistroResultDeserializeComplete(Result<(), String>),
-    ApplyDistroResultsStart {
-        batch_ids: HashSet<BatchId>,
-    },
+    #[display("apply distro results start")]
+    ApplyDistroResultsStart { batch_ids: HashSet<BatchId> },
+    #[display("apply distro results complete")]
     ApplyDistroResultsComplete(Result<(), String>),
 }
 
 #[first_class_variants(
     module = "warmup",
     impl_into_parent = "EventData",
-    derive(Debug, Clone, Serialize, Deserialize)
+    derive(Debug, Clone, Serialize, Deserialize, Display)
 )]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum Warmup {
+    #[display("p2p param info request")]
     P2PParamInfoRequest { from: IrohEndpointId },
+    #[display("p2p param info response")]
     P2PParamInfoResponse,
 
+    #[display("checkpoint download started: {size_bytes}B")]
     CheckpointDownloadStarted { size_bytes: u64 },
+    #[display("checkpoint download progress: {bytes_downloaded}B")]
     CheckpointDownloadProgress { bytes_downloaded: u64 },
+    #[display("checkpoint download complete")]
     CheckpointDownloadComplete(Result<(), String>),
+    #[display("model load started")]
     ModelLoadStarted,
+    #[display("model load complete")]
     ModelLoadComplete,
 }
 
 #[first_class_variants(
     module = "cooldown",
     impl_into_parent = "EventData",
-    derive(Debug, Clone, Serialize, Deserialize)
+    derive(Debug, Clone, Serialize, Deserialize, Display)
 )]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum Cooldown {
+    #[display("model serialization started")]
     ModelSerializationStarted,
+    #[display("model serialization finished: success={success}")]
     ModelSerializationFinished {
         success: bool,
         error_string: Option<String>,
     },
 
+    #[display("checkpoint write started")]
     CheckpointWriteStarted,
+    #[display("checkpoint write finished: success={success}")]
     CheckpointWriteFinished {
         success: bool,
         error_string: Option<String>,
     },
 
+    #[display("checkpoint upload started")]
     CheckpointUploadStarted,
-    CheckpointUploadProgress {
-        bytes_uploaded: u64,
-    },
+    #[display("checkpoint upload progress: {bytes_uploaded}B")]
+    CheckpointUploadProgress { bytes_uploaded: u64 },
+    #[display("checkpoint upload finished: success={success}")]
     CheckpointUploadFinished {
         success: bool,
         error_string: Option<String>,
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
+#[display("resource snapshot: cpu={cpu_mem_used_bytes}B gpu={gpu_mem_used_bytes:?}B")]
 pub struct ResourceSnapshot {
     pub gpu_mem_used_bytes: Option<u64>,
     pub gpu_utilization_percent: Option<f32>,
@@ -350,7 +383,8 @@ impl From<ResourceSnapshot> for EventData {
 // Read by the observer via `ClusterTimeline::from_events_dir`.
 
 /// A coordinator state snapshot written to disk on every state change.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
+#[display("coordinator: epoch={epoch} step={step} state={run_state:?}")]
 pub struct CoordinatorRecord {
     pub timestamp: DateTime<Utc>,
     pub run_state: RunState,
@@ -363,7 +397,8 @@ pub struct CoordinatorRecord {
 }
 
 /// A single active client entry within a [`CoordinatorRecord`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
+#[display("{id}: {state:?}")]
 pub struct CoordinatorClientRecord {
     /// Display string of the client's node identity.
     /// Matches the directory name used for that node's event files.

@@ -7332,6 +7332,7 @@ dependencies = [
  "tokio-util 0.7.18",
  "torch-sys",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -7348,13 +7349,13 @@ dependencies = [
  "postcard",
  "psyche-coordinator",
  "psyche-core",
+ "psyche-metrics",
  "rand 0.9.2",
  "serde",
  "serial_test",
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -7469,6 +7470,7 @@ dependencies = [
  "n0-future",
  "postcard",
  "psyche-core",
+ "psyche-event-sourcing",
  "psyche-metrics",
  "psyche-modeling",
  "psyche-tui",

@@ -16,11 +16,12 @@ psyche-core.workspace = true
 psyche-coordinator.workspace = true
 
 parking_lot = "0.12"
-derive_more = { version = "2.1.1", features = ["from"] }
+derive_more = { version = "2.1.1", features = ["from", "display"] }
 first-class-variants = "1.1.0"
 tokio.workspace = true
 tracing.workspace = true
 indexmap.workspace = true
+psyche-metrics.workspace = true
 
 [dev-dependencies]
 serial_test.workspace = true
