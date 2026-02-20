@@ -286,7 +286,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                      Some(Response::LoadedModel(checkpoint)) => {
                          // assert client and coordinator state synchronization
                          assert!(checkpoint.starts_with("P2P"), "The model should be obtained from P2P");
-                         println!("DELETE ME Client got the model with P2P");
+                         println!("Client got the model with P2P");
                          clients_with_model += 1;
                          if clients_with_model == n_new_clients {
                              println!("All clients got the model with P2P");
