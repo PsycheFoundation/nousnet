@@ -69,6 +69,10 @@ impl BandwidthTracker {
     pub fn get_total_bandwidth(&self) -> f64 {
         self.events.values().map(endpoint_bandwidth).sum()
     }
+
+    pub fn get_peer_bandwidth(&self, peer: &EndpointId) -> f64 {
+        self.events.get(peer).map(endpoint_bandwidth).unwrap_or(0.0)
+    }
 }
 
 fn endpoint_bandwidth(val: &VecDeque<DownloadEvent>) -> f64 {

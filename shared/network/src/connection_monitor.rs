@@ -4,7 +4,7 @@ use n0_future::task::AbortOnDropHandle;
 use psyche_metrics::SelectedPath;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, info};
@@ -106,24 +106,10 @@ impl ConnectionMonitor {
                     tasks.spawn(async move {
                         let mut update_interval = tokio::time::interval(Duration::from_secs(5));
                         update_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                        let mut prev_rx_bytes: u64 = 0;
-                        let mut prev_rx_time = Instant::now();
 
                         loop {
                             tokio::select! {
                                 _ = update_interval.tick() => {
-                                    let rx_bytes = Self::extract_total_rx_bytes(&paths_watcher);
-
-                                    let now = Instant::now();
-                                    let elapsed = now.duration_since(prev_rx_time).as_secs_f64();
-                                    let bandwidth = if elapsed > 0.0 {
-                                        (rx_bytes.saturating_sub(prev_rx_bytes)) as f64 / elapsed
-                                    } else {
-                                        0.0
-                                    };
-                                    prev_rx_bytes = rx_bytes;
-                                    prev_rx_time = now;
-
                                     let selected_path = Self::extract_selected_path(&paths_watcher);
 
                                     let mut conns = connections_clone.write().unwrap();
@@ -138,16 +124,6 @@ impl ConnectionMonitor {
                                             _ => 0,
                                         };
 
-                                        data.bandwidth = bandwidth;
-
-                                        if bandwidth > 0.0 {
-                                            debug!(
-                                                remote = %remote_id.fmt_short(),
-                                                bandwidth_kbps = format_args!("{:.1}", bandwidth / 1024.0),
-                                                latency_ms = selected_path.as_ref().map(|p| p.rtt.as_millis()),
-                                                "connection stats update"
-                                            );
-                                        }
                                         data.selected_path = selected_path.clone();
 
                                         if path_changed {
@@ -195,6 +171,7 @@ impl ConnectionMonitor {
                                             );
                                         }
                                     }
+                                    connections_clone.write().unwrap().remove(&remote_id);
                                     break;
                                 }
                             }
@@ -227,12 +204,12 @@ impl ConnectionMonitor {
             })
     }
 
-    /// extract total rx bytes across all paths from a paths watcher
-    fn extract_total_rx_bytes<T: Watcher<Value = iroh::endpoint::PathInfoList>>(
-        paths_watcher: &T,
-    ) -> u64 {
-        let paths = paths_watcher.peek();
-        paths.iter().map(|p| p.stats().udp_rx.bytes).sum()
+    /// update bandwidth for a specific peer from application-level download data
+    pub fn update_peer_bandwidth(&self, endpoint_id: &EndpointId, bandwidth: f64) {
+        let mut conns = self.connections.write().unwrap();
+        if let Some(data) = conns.get_mut(endpoint_id) {
+            data.bandwidth = bandwidth;
+        }
     }
 
     /// get connection data for a specific endpoint

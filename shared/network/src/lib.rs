@@ -748,9 +748,14 @@ where
         &mut self,
         update: DownloadUpdate,
     ) -> Option<NetworkEvent<BroadcastMessage, Download>> {
+        let peer_id = update.blob_ticket.addr().id;
         self.state
             .bandwidth_tracker
-            .add_event(update.blob_ticket.addr().id, update.downloaded_size_delta);
+            .add_event(peer_id, update.downloaded_size_delta);
+
+        let peer_bw = self.state.bandwidth_tracker.get_peer_bandwidth(&peer_id);
+        self.connection_monitor
+            .update_peer_bandwidth(&peer_id, peer_bw);
 
         let hash = update.blob_ticket.hash();
 

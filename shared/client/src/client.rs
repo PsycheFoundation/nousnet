@@ -497,7 +497,13 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                 metrics.record_download_retry(retry.hash);
                                 if let DownloadType::ModelSharing(ModelRequestType::Parameter(ref parameter)) = retry.download_type {
                                     info!("Retrying download for model parameter: {parameter}, (attempt {})", retry.retries);
-                                    let _ = tx_params_download.send((retry.ticket, ModelRequestType::Parameter(parameter.clone())));
+                                    if tx_params_download.send((retry.ticket, ModelRequestType::Parameter(parameter.clone()))).is_err() {
+                                        warn!("Failed to send parameter retry for {parameter}, releasing capacity");
+                                        download_scheduler.release_capacity();
+                                    }
+                                } else {
+                                    // Unexpected download type from start_parameter_retry, release the capacity slot
+                                    download_scheduler.release_capacity();
                                 }
                             }
                         }
