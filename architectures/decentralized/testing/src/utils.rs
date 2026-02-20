@@ -211,6 +211,16 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn with_warmup_time(mut self, warmup_time: u32) -> Self {
+        self.set_value("config.warmup_time", warmup_time);
+        self
+    }
+
+    pub fn with_round_witness_time(mut self, round_witness_time: u32) -> Self {
+        self.set_value("config.round_witness_time", round_witness_time);
+        self
+    }
+
     pub fn build(mut self) -> PathBuf {
         // Use min_clients if set, otherwise default to num_clients
         let min_clients = self.min_clients.unwrap_or(self.num_clients);

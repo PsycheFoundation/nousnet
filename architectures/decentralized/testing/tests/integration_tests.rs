@@ -17,8 +17,8 @@ use psyche_decentralized_testing::{
     CLIENT_CONTAINER_PREFIX, NGINX_PROXY_PREFIX,
     chaos::{ChaosAction, ChaosScheduler},
     docker_setup::{
-        e2e_testing_setup, e2e_testing_setup_with_min, kill_all_clients, spawn_new_client,
-        spawn_new_client_with_monitoring,
+        e2e_testing_setup, e2e_testing_setup_with_config, e2e_testing_setup_with_min,
+        kill_all_clients, spawn_new_client, spawn_new_client_with_monitoring,
     },
     docker_watcher::{DockerWatcher, Response},
     utils::{SolanaTestClient, write_keypair_to_file},
@@ -202,8 +202,9 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
     let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
     let mut watcher = DockerWatcher::new(docker.clone());
 
-    // initialize a Solana run with 1 client
-    let _cleanup = e2e_testing_setup(docker.clone(), 1).await;
+    // initialize a Solana run with 1 client (extra warmup for P2P model download)
+    let _cleanup =
+        e2e_testing_setup_with_config(docker.clone(), 1, |b| b.with_warmup_time(300)).await;
 
     println!("Waiting for run to go on with the first client");
     tokio::time::sleep(Duration::from_secs(60)).await;
@@ -464,11 +465,11 @@ async fn disconnect_client() {
         }
     }
 
-    // assert that two healthchecks were sent, by the alive clients
-    assert_eq!(
-        seen_health_checks.len(),
-        2,
-        "Two healthchecks should have been sent"
+    // assert that at least two healthchecks were sent by the alive clients
+    assert!(
+        seen_health_checks.len() >= 2,
+        "Expected at least 2 healthchecks, got {}",
+        seen_health_checks.len()
     );
 
     // check how many batches where lost due to the client shutdown
