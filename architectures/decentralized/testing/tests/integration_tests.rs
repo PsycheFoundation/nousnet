@@ -217,7 +217,7 @@ async fn test_two_clients_three_epochs_run() {
                             current_epoch = epoch as i64;
 
                             let Some(loss) = loss else {
-                                println!("Reached new epoch but loss was NaN");
+                                println!("REMOVE ME Reached new epoch but loss was NaN");
                                 continue;
                             };
 
