@@ -741,8 +741,24 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                     println!("Killing all clients to test checkpoint change to Hub");
                     kill_all_clients(&docker, "SIGKILL").await;
 
-                    // Wait a while before spawning a new client
-                    tokio::time::sleep(Duration::from_secs(20)).await;
+                    // Wait for the checkpoint to revert to Hub before spawning new clients.
+                    // The coordinator reverts P2P→Hub at epoch transition when all previous
+                    // clients have disconnected. We must wait for that to happen so new
+                    // clients don't try P2P with no available peers.
+                    println!("Waiting for checkpoint to revert to Hub...");
+                    for attempt in 1..=60 {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        let checkpoint = solana_client.get_checkpoint().await;
+                        if matches!(checkpoint, Checkpoint::Hub(_)) {
+                            println!("Checkpoint reverted to Hub after {attempt} attempts");
+                            break;
+                        }
+                        if attempt == 60 {
+                            panic!("Timed out waiting for checkpoint to revert to Hub (waited ~300s). Checkpoint: {checkpoint:?}");
+                        }
+                        println!("Checkpoint still {:?}, waiting... (attempt {attempt}/60)", checkpoint);
+                    }
+
                     // Spawn a new client, that should get the model with Hub
                     let joined_container_id = spawn_new_client_with_monitoring(docker.clone(), &watcher).await.unwrap();
                     println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
