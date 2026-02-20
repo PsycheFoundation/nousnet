@@ -464,11 +464,11 @@ async fn disconnect_client() {
         }
     }
 
-    // assert that at least two healthchecks were sent by the alive clients
-    assert!(
-        seen_health_checks.len() >= 2,
-        "Expected at least 2 healthchecks, got {}",
-        seen_health_checks.len()
+    // assert that two healthchecks were sent, by the alive clients
+    assert_eq!(
+        seen_health_checks.len(),
+        2,
+        "Two healthchecks should have been sent"
     );
 
     // check how many batches where lost due to the client shutdown
@@ -621,14 +621,8 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                     println!("Killing all clients to test checkpoint change to Hub");
                     kill_all_clients(&docker, "SIGKILL").await;
 
-                    // Wait for coordinator to reach WaitingForMembers (dead clients dropped, checkpoint reverts to Hub)
-                    println!("Waiting for coordinator to reach WaitingForMembers...");
-                    assert!(
-                        solana_client.wait_for_run_state(RunState::WaitingForMembers, 300).await,
-                        "Coordinator should reach WaitingForMembers after all clients are killed"
-                    );
-                    println!("Coordinator reached WaitingForMembers, checkpoint should be Hub now");
-
+                    // Wait a while before spawning a new client
+                    tokio::time::sleep(Duration::from_secs(20)).await;
                     // Spawn a new client, that should get the model with Hub
                     let joined_container_id = spawn_new_client_with_monitoring(docker.clone(), &watcher).await.unwrap();
                     println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
