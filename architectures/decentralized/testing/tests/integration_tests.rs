@@ -752,16 +752,19 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                         continue;
                     }
 
-                    // Wait 10 seconds and kill everything
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    // Wait for the coordinator to move past WaitingForMembers
+                    // before killing clients. If we kill+respawn while the coordinator
+                    // is still in WaitingForMembers, the new clients join the current
+                    // epoch and count as "previous epoch clients" at the next transition,
+                    // preventing the P2P→Hub revert.
+                    println!("Waiting for training to start before killing clients...");
+                    assert!(
+                        solana_client.wait_for_run_state(RunState::RoundTrain, 120).await,
+                        "Timed out waiting for training to start"
+                    );
 
                     println!("Killing all clients to test checkpoint change to Hub");
                     kill_all_clients(&docker, "SIGKILL").await;
-
-                    // Spawn new clients immediately — they will tick the coordinator,
-                    // which eventually triggers the epoch transition and P2P→Hub revert.
-                    // They may crash if the checkpoint is still P2P (no peers to download from),
-                    // but the health check below will respawn them.
                     let joined_container_id = spawn_new_client_with_monitoring(docker.clone(), &watcher).await.unwrap();
                     println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
                     // Spawn another because we have min_clients=2
