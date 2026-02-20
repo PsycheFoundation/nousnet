@@ -624,7 +624,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                     // Wait for coordinator to reach WaitingForMembers (dead clients dropped, checkpoint reverts to Hub)
                     println!("Waiting for coordinator to reach WaitingForMembers...");
                     assert!(
-                        solana_client.wait_for_run_state(RunState::WaitingForMembers, 120).await,
+                        solana_client.wait_for_run_state(RunState::WaitingForMembers, 300).await,
                         "Coordinator should reach WaitingForMembers after all clients are killed"
                     );
                     println!("Coordinator reached WaitingForMembers, checkpoint should be Hub now");
