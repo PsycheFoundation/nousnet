@@ -90,6 +90,11 @@ async fn test_one_clients_three_epochs_run() {
                         let state = solana_client.get_run_state().await;
                         let epoch = solana_client.get_current_epoch().await;
                         let step = solana_client.get_last_step().await;
+                        let name = format!("{CLIENT_CONTAINER_PREFIX}-1");
+                        let logs = watcher.fetch_container_logs(&name, 200).await;
+                        eprintln!("\n========== Last 200 lines from {name} ==========");
+                        eprintln!("{logs}");
+                        eprintln!("========== End of logs ==========\n");
                         panic!(
                             "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
                         );
@@ -197,6 +202,13 @@ async fn test_two_clients_three_epochs_run() {
                         let state = solana_client.get_run_state().await;
                         let epoch = solana_client.get_current_epoch().await;
                         let step = solana_client.get_last_step().await;
+                        for i in 1..=2 {
+                            let name = format!("{CLIENT_CONTAINER_PREFIX}-{i}");
+                            let logs = watcher.fetch_container_logs(&name, 200).await;
+                            eprintln!("\n========== Last 200 lines from {name} ==========");
+                            eprintln!("{logs}");
+                            eprintln!("========== End of logs ==========\n");
+                        }
                         panic!(
                             "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
                         );
