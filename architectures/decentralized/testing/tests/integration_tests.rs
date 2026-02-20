@@ -427,7 +427,7 @@ async fn disconnect_client() {
                 }
 
                 if killed_client
-                    && seen_health_checks.len() >= 1
+                    && seen_health_checks.len() >= 2
                     && new_state == RunState::Cooldown.to_string()
                 {
                     let epoch_clients = solana_client.get_current_epoch_clients().await;
@@ -464,11 +464,11 @@ async fn disconnect_client() {
         }
     }
 
-    // assert that at least one healthcheck was sent by the alive clients
-    assert!(
-        seen_health_checks.len() >= 1,
-        "At least one healthcheck should have been sent, got {}",
-        seen_health_checks.len()
+    // assert that two healthchecks were sent, by the alive clients
+    assert_eq!(
+        seen_health_checks.len(),
+        2,
+        "Two healthchecks should have been sent"
     );
 
     // check how many batches where lost due to the client shutdown
@@ -707,27 +707,17 @@ async fn test_solana_subscriptions() {
 
     let mut live_interval = time::interval(Duration::from_secs(10));
     let mut subscription_events: Vec<(String, String)> = Vec::new();
-    let mut proxy1_stopped = false;
-    let mut proxy1_resumed = false;
-    let mut proxy2_stopped = false;
-    let mut proxy2_resumed = false;
 
     loop {
         tokio::select! {
             _ = live_interval.tick() => {
-                println!("[health_check] checking 2 clients alive (proxy1_stopped={proxy1_stopped} proxy1_resumed={proxy1_resumed} proxy2_stopped={proxy2_stopped} proxy2_resumed={proxy2_resumed})");
                 if let Err(e) = watcher.monitor_clients_health(2).await {
-                    println!("[health_check_FAILED] error={e}");
-                    println!("[health_check_FAILED] subscription_events_so_far={subscription_events:?}");
                     panic!("{}", e);
                 }
             }
             response = watcher.log_rx.recv() => {
                 match response {
                     Some(Response::StateChange(_timestamp, _client_1, old_state, new_state, epoch , step)) => {
-                        println!(
-                            "[state_change] epoch={epoch} step={step} {old_state} -> {new_state}",
-                        );
                         if old_state == RunState::WaitingForMembers.to_string() {
                             println!(
                                 "Starting epoch: {epoch}",
@@ -735,41 +725,42 @@ async fn test_solana_subscriptions() {
                         }
 
                         // shutdown subscription 1
-                        if step == 2 && new_state == RunState::RoundWitness.to_string(){
-                            println!("[proxy_op] step={step} STOP proxy-1");
+                        if step == 5 && new_state == RunState::RoundWitness.to_string(){
+                            println!("stop container {NGINX_PROXY_PREFIX}-1");
+
                             docker
                                 .stop_container(&format!("{NGINX_PROXY_PREFIX}-1"), None)
                                 .await
-                                .unwrap();
-                            proxy1_stopped = true;
+                                .unwrap()
+
                         }
                         // resume subscription 1
-                        if step == 5 && new_state == RunState::RoundWitness.to_string(){
-                            println!("[proxy_op] step={step} RESUME proxy-1");
+                        if step == 15 && new_state == RunState::RoundWitness.to_string(){
+                            println!("resume container {NGINX_PROXY_PREFIX}-1");
                             docker
                                 .start_container(&format!("{NGINX_PROXY_PREFIX}-1"), None::<StartContainerOptions<String>>)
                                 .await
                                 .unwrap();
-                            proxy1_resumed = true;
+
                         }
 
                         // shutdown subscription 2
-                        if step == 8 && new_state == RunState::RoundWitness.to_string(){
-                            println!("[proxy_op] step={step} STOP proxy-2");
+                        if step == 25 && new_state == RunState::RoundWitness.to_string(){
+                            println!("stop container {NGINX_PROXY_PREFIX}-2");
                             docker
                                 .stop_container(&format!("{NGINX_PROXY_PREFIX}-2"), None)
                                 .await
-                                .unwrap();
-                            proxy2_stopped = true;
+                                .unwrap()
+
                         }
                         // resume subscription 2
-                        if step == 10 && new_state == RunState::RoundWitness.to_string(){
-                            println!("[proxy_op] step={step} RESUME proxy-2");
+                        if step == 30 && new_state == RunState::RoundWitness.to_string(){
+                            println!("resume container {NGINX_PROXY_PREFIX}-2");
+
                             docker
                                 .start_container(&format!("{NGINX_PROXY_PREFIX}-2"), None::<StartContainerOptions<String>>)
                                 .await
                                 .unwrap();
-                            proxy2_resumed = true;
                         }
 
                         // finish test
