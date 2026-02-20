@@ -27,6 +27,37 @@ use rstest::*;
 use serial_test::serial;
 use tokio::time;
 
+/// Dump the last N lines of logs from all test containers (clients, proxies, validator).
+/// Call this at the end of tests to aid debugging CI failures.
+async fn dump_all_container_logs(docker: &Arc<Docker>, watcher: &DockerWatcher, tail: usize) {
+    use psyche_decentralized_testing::VALIDATOR_CONTAINER_PREFIX;
+
+    let containers = docker
+        .list_containers::<String>(Some(bollard::container::ListContainersOptions {
+            all: true,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_or_default();
+
+    for cont in containers {
+        if let Some(names) = &cont.names {
+            if let Some(name) = names.first() {
+                let name = name.trim_start_matches('/');
+                if name.starts_with(CLIENT_CONTAINER_PREFIX)
+                    || name.starts_with(NGINX_PROXY_PREFIX)
+                    || name.starts_with(VALIDATOR_CONTAINER_PREFIX)
+                {
+                    let logs = watcher.fetch_container_logs(name, tail).await;
+                    eprintln!("\n========== Last {tail} lines from {name} ==========");
+                    eprintln!("{}", logs);
+                    eprintln!("========== End of logs from {name} ==========\n");
+                }
+            }
+        }
+    }
+}
+
 /// spawn 1 clients and run for 3 epochs
 /// assert client and coordinator state synchronization
 /// assert that the loss decreases in each epoch
@@ -103,6 +134,7 @@ async fn test_one_clients_three_epochs_run() {
             }
         }
     }
+    dump_all_container_logs(&docker, &watcher, 200).await;
 }
 
 /// spawn 2 clients and run for 3 epochs
@@ -191,6 +223,7 @@ async fn test_two_clients_three_epochs_run() {
             }
         }
     }
+    dump_all_container_logs(&docker, &watcher, 200).await;
 }
 
 // Test p2p model sharing process
@@ -249,6 +282,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                          clients_with_model += 1;
                          if clients_with_model == n_new_clients {
                              println!("All clients got the model with P2P");
+                             dump_all_container_logs(&docker, &watcher, 200).await;
                              return;
                          }
                      }
@@ -314,6 +348,7 @@ async fn test_rejoining_client_delay() {
                    // assert client and coordinator state synchronization
                    assert!(checkpoint.starts_with("P2P"), "The model should be obtained from P2P");
                    println!("Client got the model with P2P");
+                   dump_all_container_logs(&docker, &watcher, 200).await;
                    return;
                }
            }
@@ -465,6 +500,8 @@ async fn disconnect_client() {
         }
     }
 
+    dump_all_container_logs(&docker, &watcher, 200).await;
+
     // assert that at least two healthchecks were sent by the alive clients
     assert!(
         seen_health_checks.len() >= 2,
@@ -572,6 +609,7 @@ async fn drop_a_client_waitingformembers_then_reconnect() {
         "System should have returned to Warmup state after client reconnection"
     );
     println!("Successfully returned to Warmup state after client reconnection");
+    dump_all_container_logs(&docker, &watcher, 200).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -640,6 +678,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                     let checkpoint = solana_client.get_checkpoint().await;
                     if matches!(checkpoint, Checkpoint::Hub(_)) {
                         println!("Checkpoint is Hub, test succesful");
+                        dump_all_container_logs(&docker, &watcher, 200).await;
                         return;
                     } else {
                         println!("Checkpoint is not Hub yet, waiting...");
@@ -726,7 +765,7 @@ async fn test_solana_subscriptions() {
                         }
 
                         // shutdown subscription 1
-                        if step == 5 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 2 && new_state == RunState::RoundWitness.to_string(){
                             println!("stop container {NGINX_PROXY_PREFIX}-1");
 
                             docker
@@ -736,7 +775,7 @@ async fn test_solana_subscriptions() {
 
                         }
                         // resume subscription 1
-                        if step == 15 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 5 && new_state == RunState::RoundWitness.to_string(){
                             println!("resume container {NGINX_PROXY_PREFIX}-1");
                             docker
                                 .start_container(&format!("{NGINX_PROXY_PREFIX}-1"), None::<StartContainerOptions<String>>)
@@ -746,7 +785,7 @@ async fn test_solana_subscriptions() {
                         }
 
                         // shutdown subscription 2
-                        if step == 25 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 8 && new_state == RunState::RoundWitness.to_string(){
                             println!("stop container {NGINX_PROXY_PREFIX}-2");
                             docker
                                 .stop_container(&format!("{NGINX_PROXY_PREFIX}-2"), None)
@@ -755,7 +794,7 @@ async fn test_solana_subscriptions() {
 
                         }
                         // resume subscription 2
-                        if step == 30 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 10 && new_state == RunState::RoundWitness.to_string(){
                             println!("resume container {NGINX_PROXY_PREFIX}-2");
 
                             docker
@@ -780,6 +819,8 @@ async fn test_solana_subscriptions() {
 
         }
     }
+    dump_all_container_logs(&docker, &watcher, 200).await;
+
     // skip the first 3 events since init subscriptions can vary the order
     subscription_events = subscription_events[3..].into();
     subscription_events.dedup();
@@ -874,6 +915,7 @@ async fn test_everybody_leaves_in_warmup() {
             }
         }
     }
+    dump_all_container_logs(&docker, &watcher, 200).await;
 }
 
 /// Tests that if your only peer disconnects, the new client goes back to fetching the model from Hub and not P2P
@@ -954,6 +996,7 @@ async fn test_lost_only_peer_go_back_to_hub_checkpoint() {
                             // Assert checkpoint is Hub
                             assert!(checkpoint.starts_with("pefontana/") || checkpoint.starts_with("emozilla/"), "The model should be obtained from Hub since the other client disconnected");
                             println!("Model succesfuly obtained from Hub");
+                            dump_all_container_logs(&docker, &watcher, 200).await;
                             return;
                         }
                     }
@@ -1108,6 +1151,7 @@ async fn test_pause_and_resume_run() {
                         println!(
                             "Trained for {num_epochs_after_rejoin} epochs after rejoin. Loss continued to decrease. Test successful!"
                         );
+                        dump_all_container_logs(&docker, &watcher, 200).await;
                         return;
                     }
                 }
