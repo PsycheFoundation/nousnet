@@ -735,7 +735,7 @@ async fn test_solana_subscriptions() {
 
                         }
                         // resume subscription 1
-                        if step == 3 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 4 && new_state == RunState::RoundWitness.to_string(){
                             println!("resume container {NGINX_PROXY_PREFIX}-1");
                             docker
                                 .start_container(&format!("{NGINX_PROXY_PREFIX}-1"), None::<StartContainerOptions<String>>)
@@ -745,7 +745,7 @@ async fn test_solana_subscriptions() {
                         }
 
                         // shutdown subscription 2
-                        if step == 5 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 7 && new_state == RunState::RoundWitness.to_string(){
                             println!("stop container {NGINX_PROXY_PREFIX}-2");
                             docker
                                 .stop_container(&format!("{NGINX_PROXY_PREFIX}-2"), None)
@@ -754,7 +754,7 @@ async fn test_solana_subscriptions() {
 
                         }
                         // resume subscription 2
-                        if step == 6 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 9 && new_state == RunState::RoundWitness.to_string(){
                             println!("resume container {NGINX_PROXY_PREFIX}-2");
 
                             docker
