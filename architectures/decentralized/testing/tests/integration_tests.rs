@@ -288,9 +288,28 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                     panic!("{}", e);
                }
            }
-           response = watcher.log_rx.recv() => {
+           response = async {
+               time::timeout(
+                   Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
+                   watcher.log_rx.recv(),
+               ).await
+           } => {
+               let response = match response {
+                   Ok(Some(response)) => response,
+                   Ok(None) => panic!("Log channel closed unexpectedly"),
+                   Err(_) => {
+                       for i in 1..=n_new_clients {
+                           let name = format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1);
+                           let logs = watcher.fetch_container_logs(&name, 200).await;
+                           eprintln!("\n========== Last 200 lines from {name} ==========");
+                           eprintln!("{logs}");
+                           eprintln!("========== End of logs ==========\n");
+                       }
+                       panic!("Timed out waiting for log events after {EPOCH_EVENT_TIMEOUT_SECS}s");
+                   }
+               };
                match response {
-                     Some(Response::Loss(_client, epoch, _step, _loss)) => {
+                     Response::Loss(_client, epoch, _step, _loss) => {
                           if epoch >= 2 {
                                for i in 1..=n_new_clients {
                                    let name = format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1);
@@ -302,7 +321,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                                panic!("Epoch 2 started and the clients did not get the model via P2P");
                           }
                      }
-                     Some(Response::LoadedModel(checkpoint)) => {
+                     Response::LoadedModel(checkpoint) => {
                          // assert client and coordinator state synchronization
                          assert!(checkpoint.starts_with("P2P"), "The model should be obtained from P2P");
                          println!("Client got the model with P2P");
