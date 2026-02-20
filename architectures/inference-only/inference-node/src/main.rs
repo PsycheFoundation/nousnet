@@ -168,6 +168,7 @@ async fn main() -> Result<()> {
     };
 
     let current_model_name = Arc::new(RwLock::new(run_args.model_name.clone()));
+    let is_loading = Arc::new(RwLock::new(false));
     let tensor_parallel_size = run_args.tensor_parallel_size;
     let gpu_memory_utilization = run_args.gpu_memory_utilization;
 
@@ -288,15 +289,22 @@ async fn main() -> Result<()> {
                                     let current = current_model_name.read().await;
                                     current.as_ref() == Some(&requested_model)
                                 };
+
+                                let already_loading = *is_loading.read().await;
+
                                 if model_already_loaded {
                                     info!("Model {} already loaded, skipping", requested_model);
+                                } else if already_loading {
+                                    info!("Model load already in progress, skipping concurrent load request for {}", requested_model);
                                 } else {
+                                    *is_loading.write().await = true;
                                     info!("Loading new model: {} (background task)", requested_model);
 
                                     // Spawn background task to avoid blocking the event loop
                                     // Model loading can take 10-60+ seconds, so we don't want to block heartbeats
                                     let inference_node_shared_clone = inference_node_shared.clone();
                                     let current_model_name_clone = current_model_name.clone();
+                                    let is_loading_clone = is_loading.clone();
                                     let requested_model_clone = requested_model.clone();
 
                                     tokio::spawn(async move {
@@ -312,6 +320,8 @@ async fn main() -> Result<()> {
                                             info!("Waiting 5s for GPU memory to be released...");
                                             tokio::time::sleep(Duration::from_secs(5)).await;
                                         }
+
+                                        *current_model_name_clone.write().await = None;
 
                                         // Load new model (blocking operation)
                                         let load_result = (|| -> Result<InferenceNode> {
@@ -343,6 +353,8 @@ async fn main() -> Result<()> {
                                                 error!("Failed to load model {}: {:#}", requested_model_clone, e);
                                             }
                                         }
+
+                                        *is_loading_clone.write().await = false;
                                     });
                                 }
                             }
