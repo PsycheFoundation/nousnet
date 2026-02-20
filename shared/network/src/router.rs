@@ -69,7 +69,7 @@ mod tests {
     use std::time::Duration;
 
     use futures_util::future::join_all;
-    use iroh::{Endpoint, SecretKey, address_lookup::memory::MemoryLookup};
+    use iroh::{Endpoint, RelayMode, SecretKey, address_lookup::memory::MemoryLookup};
     use iroh_blobs::store::mem::MemStore;
     use iroh_gossip::{
         api::{Event, Message},
@@ -85,7 +85,10 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_shutdown() -> Result<()> {
-        let endpoint = Endpoint::builder().bind().await?;
+        let endpoint = Endpoint::builder()
+            .relay_mode(RelayMode::Disabled)
+            .bind()
+            .await?;
         let blobs = MemStore::new();
         let gossip = Gossip::builder().spawn(endpoint.clone());
         let (tx_model_parameter_req, _rx_model_parameter_req) =
@@ -148,6 +151,7 @@ mod tests {
                     let static_discovery = MemoryLookup::new();
                     let endpoint = Endpoint::builder()
                         .secret_key(k)
+                        .relay_mode(RelayMode::Disabled)
                         .clear_address_lookup()
                         .address_lookup(static_discovery.clone())
                         .bind()
@@ -191,22 +195,26 @@ mod tests {
 
             subscriptions.push(async move {
                 if i < N_ALLOWED as usize {
+                    let expected_neighbors = N_ALLOWED as usize - 1;
                     println!(
-                        "waiting for {i} ({}) to get at least 1 peer..",
+                        "waiting for {i} ({}) to connect to {expected_neighbors} neighbors..",
                         router.endpoint().id()
                     );
-                    sub.joined().await.unwrap();
-                    // long delay to ensure gossip is fully connected.
-                    // if we don't wait until we have a fully connected gossip, then we could broadcast while we only had unidirectional neighbor connections:
-                    // confirming a join takes one trip, so we can end in this situation when broadcasting starts:
-                    // a: neighbors = [b]
-                    // b: neighbors = [c]
-                    // c: neighbors = [b]
-                    // now c broadcasts, sends to b, and b drops the message because it does not have further neighbors
-                    // in a very short time after, it will receive the neighbor message from a, but too late, because iroh-gossip does not forward messages received before a join
-
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    println!("gossip connections {i} ready");
+                    // Wait for all expected NeighborUp events before broadcasting.
+                    let mut neighbor_count = 0;
+                    tokio::time::timeout(Duration::from_secs(30), async {
+                        while let Some(Ok(event)) = sub.next().await {
+                            if matches!(event, Event::NeighborUp(_)) {
+                                neighbor_count += 1;
+                                if neighbor_count >= expected_neighbors {
+                                    break;
+                                }
+                            }
+                        }
+                    })
+                    .await
+                    .expect("timed out waiting for all neighbors to connect");
+                    println!("gossip connections {i} ready ({neighbor_count} neighbors)");
                 }
                 let (gossip_tx, gossip_rx) = sub.split();
                 (gossip_tx, gossip_rx)
@@ -231,14 +239,29 @@ mod tests {
         let mut tasks = vec![];
         for (i, (_, mut gossip_rx)) in subscriptions.into_iter().enumerate() {
             tasks.push(tokio::spawn(async move {
+                let expected_count = if i < N_ALLOWED as usize {
+                    N_ALLOWED as usize - 1
+                } else {
+                    // Non-allowed clients shouldn't receive any messages
+                    0
+                };
+
                 let mut received_messages = Vec::new();
-                tokio::time::timeout(Duration::from_millis(200), async {
+                // For allowed clients, wait deterministically until all expected
+                let timeout = if expected_count > 0 {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::from_secs(1)
+                };
+                tokio::time::timeout(timeout, async {
                     while let Some(Ok(msg)) = gossip_rx.next().await {
                         if let Event::Received(Message { content, .. }) = msg {
                             let message =
                                 String::from_utf8(content.to_vec()).expect("non-utf8 message");
-
                             received_messages.push(message);
+                            if received_messages.len() >= expected_count {
+                                break;
+                            }
                         } else if let Event::Lagged = msg {
                             panic!("lagged..");
                         }
@@ -247,7 +270,7 @@ mod tests {
                 .await
                 .ok();
 
-                // Verify that messages from non-allowed clients (i > N_ALLOWED) are not received
+                // Verify that messages from non-allowed clients are not received
                 for message in &received_messages {
                     let sender_id = message
                         .strip_prefix("Message from client ")
@@ -263,10 +286,10 @@ mod tests {
                 // Verify that all messages from allowed clients are received
                 if i < N_ALLOWED as usize {
                     assert_eq!(
-                    received_messages.len(),
-                    N_ALLOWED as usize - 1, // -1 because we're one of them!
-                    "Router {i} didn't receive all allowed messages. only saw {received_messages:?}"
-                );
+                        received_messages.len(),
+                        expected_count,
+                        "Router {i} didn't receive all allowed messages. only saw {received_messages:?}"
+                    );
                     println!("Router {i} received all messages");
                 }
             }));
