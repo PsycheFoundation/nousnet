@@ -680,6 +680,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
     let solana_client = SolanaTestClient::new(run_id, None).await;
     let mut has_spawned_new_client_yet = false;
     let mut has_checked_p2p_checkpoint = false;
+    let mut hub_wait_iterations = 0;
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
     println!("starting loop");
     loop {
@@ -748,7 +749,20 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                         println!("Checkpoint is Hub, test succesful");
                         return;
                     } else {
-                        println!("Checkpoint is not Hub yet, waiting...");
+                        hub_wait_iterations += 1;
+                        println!("Checkpoint is not Hub yet, waiting... (attempt {hub_wait_iterations}/30)");
+                        if hub_wait_iterations >= 30 {
+                            for i in 3..=4 {
+                                let name = format!("{CLIENT_CONTAINER_PREFIX}-{i}");
+                                let logs = watcher.fetch_container_logs(&name, 200).await;
+                                eprintln!("\n========== Last 200 lines from {name} ==========");
+                                eprintln!("{logs}");
+                                eprintln!("========== End of logs ==========\n");
+                            }
+                            panic!(
+                                "Timed out waiting for checkpoint to become Hub (waited ~300s). Checkpoint: {checkpoint:?}",
+                            );
+                        }
                     }
                 }
             }
