@@ -427,7 +427,7 @@ async fn disconnect_client() {
                 }
 
                 if killed_client
-                    && seen_health_checks.len() >= 1
+                    && seen_health_checks.len() >= 2
                     && new_state == RunState::Cooldown.to_string()
                 {
                     let epoch_clients = solana_client.get_current_epoch_clients().await;
@@ -464,11 +464,11 @@ async fn disconnect_client() {
         }
     }
 
-    // assert that at least one healthcheck was sent by the alive clients
-    assert!(
-        seen_health_checks.len() >= 1,
-        "At least one healthcheck should have been sent, got {}",
-        seen_health_checks.len()
+    // assert that two healthchecks were sent, by the alive clients
+    assert_eq!(
+        seen_health_checks.len(),
+        2,
+        "Two healthchecks should have been sent"
     );
 
     // check how many batches where lost due to the client shutdown
