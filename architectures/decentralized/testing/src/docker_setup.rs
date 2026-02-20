@@ -104,14 +104,12 @@ pub async fn e2e_testing_setup_subscription(
     #[cfg(not(feature = "python"))]
     let config_file_path = ConfigBuilder::new()
         .with_num_clients(init_num_clients)
-        .with_round_witness_time(15)
         .build();
     #[cfg(feature = "python")]
     let config_file_path = ConfigBuilder::new()
         .with_num_clients(init_num_clients)
         .with_architecture("HfAuto")
         .with_batch_size(8 * init_num_clients as u32)
-        .with_round_witness_time(15)
         .build();
 
     println!("[+] Config file written to: {}", config_file_path.display());
