@@ -143,35 +143,6 @@ impl<'a> Widget for LossGraphWidget<'a> {
             )
             .collect();
 
-        // Epoch boundary vertical lines in the chart body — DarkGray braille, no legend entry.
-        let mut seen_body: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-        let boundary_point_vecs: Vec<Vec<(f64, f64)>> = node_data
-            .iter()
-            .flat_map(|Node { boundaries, .. }| boundaries.iter().copied())
-            .filter_map(|(bx, _)| {
-                let key = (bx * 10.0).round() as i64;
-                if seen_body.insert(key) {
-                    let pts: Vec<(f64, f64)> = (0..=80)
-                        .map(|i| (bx, y_min + (y_max - y_min) * (i as f64) / 80.0))
-                        .collect();
-                    Some(pts)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for pts in &boundary_point_vecs {
-            datasets.push(
-                Dataset::default()
-                    .name("")
-                    .marker(symbols::Marker::Braille)
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(Color::DarkGray))
-                    .data(pts),
-            );
-        }
-
         // Split inner: epoch ruler (1 row, top) + chart area (rest).
         if inner.height < 3 {
             return;
@@ -188,6 +159,71 @@ impl<'a> Widget for LossGraphWidget<'a> {
             width: inner.width,
             height: inner.height - 1,
         };
+
+        // Column geometry — needed to filter boundaries by pixel distance.
+        // The chart reserves `y_label_max_len + 1` columns for the y-axis on the left.
+        let y_label_max_len = format!("{:.2}", y_max)
+            .len()
+            .max(format!("{:.2}", y_min).len()) as u16;
+        let plot_x_start = chart_area.x + y_label_max_len + 1;
+        let plot_width = chart_area.width.saturating_sub(y_label_max_len + 1);
+
+        // Collect unique boundaries (x-value dedup), compute their column, then
+        // drop any that land within MIN_BOUNDARY_COLS of the previous accepted one.
+        const MIN_BOUNDARY_COLS: u16 = 10;
+        let x_range = x_max - x_min;
+
+        let mut seen_x: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+        let mut raw_boundaries: Vec<(f64, u64, u16)> = node_data
+            .iter()
+            .flat_map(|Node { boundaries, .. }| boundaries.iter().copied())
+            .filter_map(|(bx, epoch)| {
+                let key = (bx * 10.0).round() as i64;
+                if !seen_x.insert(key) || x_range <= f64::EPSILON || plot_width == 0 {
+                    return None;
+                }
+                let col = plot_x_start + ((bx - x_min) / x_range * plot_width as f64) as u16;
+                if col < epoch_ruler.x + epoch_ruler.width {
+                    Some((bx, epoch, col))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        raw_boundaries.sort_by_key(|&(_, _, col)| col);
+
+        let mut boundaries_to_draw: Vec<(f64, u64, u16)> = Vec::new();
+        for entry in raw_boundaries {
+            let col = entry.2;
+            if boundaries_to_draw
+                .last()
+                .is_none_or(|&(_, _, prev_col)| col.saturating_sub(prev_col) >= MIN_BOUNDARY_COLS)
+            {
+                boundaries_to_draw.push(entry);
+            }
+        }
+
+        // Epoch boundary vertical lines in the chart body — DarkGray braille, no legend entry.
+        let boundary_point_vecs: Vec<Vec<(f64, f64)>> = boundaries_to_draw
+            .iter()
+            .map(|&(bx, _, _)| {
+                (0..=80)
+                    .map(|i| (bx, y_min + (y_max - y_min) * (i as f64) / 80.0))
+                    .collect()
+            })
+            .collect();
+
+        for pts in &boundary_point_vecs {
+            datasets.push(
+                Dataset::default()
+                    .name("")
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(Color::DarkGray))
+                    .data(pts),
+            );
+        }
 
         // Step-count x-axis (bottom), loss y-axis.
         let x_axis = Axis::default()
@@ -210,47 +246,27 @@ impl<'a> Widget for LossGraphWidget<'a> {
             .render(chart_area, buf);
 
         // Draw epoch boundary ticks in the epoch ruler row above the chart.
-        // The chart reserves `y_label_max_len + 1` columns for the y-axis on the left.
-        let y_label_max_len = format!("{:.2}", y_max)
-            .len()
-            .max(format!("{:.2}", y_min).len()) as u16;
-        let plot_x_start = chart_area.x + y_label_max_len + 1;
-        let plot_width = chart_area.width.saturating_sub(y_label_max_len + 1);
-
-        if plot_width > 0 {
-            let x_range = x_max - x_min;
-            let mut seen_ruler: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-            for Node { boundaries, .. } in &node_data {
-                for &(bx, epoch) in boundaries {
-                    let key = (bx * 10.0).round() as i64;
-                    if seen_ruler.insert(key) && x_range > f64::EPSILON {
-                        let rel = ((bx - x_min) / x_range * plot_width as f64) as u16;
-                        let col = plot_x_start + rel;
-                        if col < epoch_ruler.x + epoch_ruler.width {
-                            buf.set_string(
-                                col,
-                                epoch_ruler.y,
-                                "│",
-                                Style::default().fg(Color::DarkGray),
-                            );
-                            let label = format!("e{epoch}");
-                            let label_end = col + 1 + label.len() as u16;
-                            let visible_end = label_end.min(epoch_ruler.x + epoch_ruler.width);
-                            if col + 1 < visible_end {
-                                let chars: String = label
-                                    .chars()
-                                    .take((visible_end - col - 1) as usize)
-                                    .collect();
-                                buf.set_string(
-                                    col + 1,
-                                    epoch_ruler.y,
-                                    &chars,
-                                    Style::default().fg(Color::DarkGray),
-                                );
-                            }
-                        }
-                    }
-                }
+        for &(_, epoch, col) in &boundaries_to_draw {
+            buf.set_string(
+                col,
+                epoch_ruler.y,
+                "│",
+                Style::default().fg(Color::DarkGray),
+            );
+            let label = format!("e{epoch}");
+            let label_end = col + 1 + label.len() as u16;
+            let visible_end = label_end.min(epoch_ruler.x + epoch_ruler.width);
+            if col + 1 < visible_end {
+                let chars: String = label
+                    .chars()
+                    .take((visible_end - col - 1) as usize)
+                    .collect();
+                buf.set_string(
+                    col + 1,
+                    epoch_ruler.y,
+                    &chars,
+                    Style::default().fg(Color::DarkGray),
+                );
             }
         }
     }

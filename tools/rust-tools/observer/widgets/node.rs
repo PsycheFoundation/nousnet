@@ -30,13 +30,20 @@ impl<'a> Widget for NodeWidget<'a> {
 
         let Some((id, node)) = node_entry else {
             let msg = if self.selected_node_idx.is_none() {
-                "\nUse ↑/↓ to select a node"
+                "Use ↑/↓ to select a node"
             } else {
-                "\nNo nodes"
+                "No nodes"
             };
             Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
                 .centered()
-                .render(area, buf);
+                .render(
+                    Rect {
+                        y: inner.y + inner.height / 2,
+                        height: 1,
+                        ..inner
+                    },
+                    buf,
+                );
             return;
         };
 
