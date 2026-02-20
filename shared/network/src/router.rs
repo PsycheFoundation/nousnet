@@ -201,8 +201,6 @@ mod tests {
                         router.endpoint().id()
                     );
                     // Wait for all expected NeighborUp events before broadcasting.
-                    // This is deterministic unlike a fixed sleep: we wait for the
-                    // exact condition (full mesh) rather than hoping a timeout is enough.
                     let mut neighbor_count = 0;
                     tokio::time::timeout(Duration::from_secs(30), async {
                         while let Some(Ok(event)) = sub.next().await {
@@ -244,15 +242,12 @@ mod tests {
                 let expected_count = if i < N_ALLOWED as usize {
                     N_ALLOWED as usize - 1
                 } else {
-                    // Non-allowed clients shouldn't receive any messages,
-                    // but we still wait briefly to confirm nothing arrives.
+                    // Non-allowed clients shouldn't receive any messages
                     0
                 };
 
                 let mut received_messages = Vec::new();
                 // For allowed clients, wait deterministically until all expected
-                // messages arrive. For non-allowed clients, wait briefly to confirm
-                // no messages leak through.
                 let timeout = if expected_count > 0 {
                     Duration::from_secs(30)
                 } else {
@@ -264,7 +259,6 @@ mod tests {
                             let message =
                                 String::from_utf8(content.to_vec()).expect("non-utf8 message");
                             received_messages.push(message);
-                            // Once we have all expected messages, stop waiting.
                             if received_messages.len() >= expected_count {
                                 break;
                             }
