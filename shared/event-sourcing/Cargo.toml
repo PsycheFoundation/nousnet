@@ -3,6 +3,10 @@ name = "psyche-event-sourcing"
 version.workspace = true
 edition = "2021"
 
+[features]
+default = ["observer"]
+observer = ["dep:ratatui", "dep:crossterm", "dep:clap"]
+
 [dependencies]
 serde.workspace = true
 postcard.workspace = true
@@ -13,12 +17,23 @@ iroh.workspace = true
 iroh-blobs.workspace = true
 
 psyche-core.workspace = true
+psyche-coordinator.workspace = true
 
 parking_lot = "0.12"
 derive_more = { version = "2.1.1", features = ["from"] }
 first-class-variants = "1.1.0"
 tokio.workspace = true
 tracing.workspace = true
+indexmap = { version = "2", features = ["serde"] }
+
+ratatui = { version = "0.28.1", optional = true }
+crossterm = { version = "0.28.1", features = ["event-stream"], optional = true }
+clap = { workspace = true, optional = true }
+
+[[bin]]
+name = "observer"
+path = "src/bin/observer/main.rs"
+required-features = ["observer"]
 
 [dev-dependencies]
 serial_test.workspace = true

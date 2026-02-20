@@ -44,7 +44,7 @@ run_started
 - run_id
 - node_id
 - node_role (trainer/witness/etc)
-- config_hash or key config params
+- config
 - psyche_version
 - start_timestamp
 

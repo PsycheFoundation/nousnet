@@ -177,7 +177,7 @@ impl EventStore {
     }
 }
 
-fn try_decode_cobs_frame<T: serde::de::DeserializeOwned>(
+pub(crate) fn try_decode_cobs_frame<T: serde::de::DeserializeOwned>(
     data: &[u8],
     cursor: &mut usize,
 ) -> Option<T> {
@@ -228,6 +228,8 @@ impl FileWriterState {
         let filename = format!("events-epoch-{}-{}.postcard", epoch, timestamp);
         let file_path = base_path.join(&filename);
 
+        std::fs::create_dir_all(base_path)?;
+
         let mut file = File::create(&file_path)?;
 
         // each file is self-contained with context
@@ -270,7 +272,6 @@ impl FileWriterState {
 mod tests {
     use super::*;
     use crate::{event, events::*};
-    use crate::{p2p, train};
     use serial_test::serial;
     use std::fs;
     use std::sync::LazyLock;

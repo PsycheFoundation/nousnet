@@ -7,17 +7,15 @@ use bollard::{
     models::DeviceRequest,
     secret::{ContainerSummary, HostConfig},
 };
-use psyche_core::IntegrationTestLogMarker;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
 
-use crate::{
-    docker_watcher::{DockerWatcher, DockerWatcherError},
-    utils::ConfigBuilder,
-};
+use crate::{docker_watcher::DockerWatcherError, utils::ConfigBuilder};
+
+pub const EVENTS_BASE_DIR: &str = "../../../docker/test/data/events";
 
 /// Check if GPU is available by looking for nvidia-smi or USE_GPU environment variable
 fn has_gpu_support() -> bool {
@@ -42,6 +40,11 @@ pub const NGINX_PROXY_PREFIX: &str = "nginx-proxy";
 pub struct DockerTestCleanup;
 impl Drop for DockerTestCleanup {
     fn drop(&mut self) {
+        let events_dir = PathBuf::from(EVENTS_BASE_DIR);
+        if events_dir.exists() {
+            let _ = std::fs::remove_dir_all(&events_dir);
+        }
+
         println!("\nStopping containers...");
         let output = Command::new("just")
             .args(["stop_test_infra"])
@@ -73,6 +76,11 @@ pub async fn e2e_testing_setup_with_min(
     min_clients: usize,
     owner_keypair_path: Option<&Path>,
 ) -> DockerTestCleanup {
+    let events_dir = PathBuf::from(EVENTS_BASE_DIR);
+    if events_dir.exists() {
+        let _ = std::fs::remove_dir_all(&events_dir);
+    }
+
     remove_old_client_containers(docker_client).await;
 
     spawn_psyche_network_with_min(init_num_clients, min_clients, owner_keypair_path).unwrap();
@@ -139,16 +147,20 @@ pub async fn spawn_new_client(
     // Setting extra hosts and optionally nvidia request
     let network_name = "test_psyche-test-network";
 
-    // Build volume binds and extra env vars for keypair
-    let (binds, extra_env) = if let Some(path) = keypair_path {
+    // Always mount the events directory so the container can write event files.
+    let events_base = PathBuf::from(EVENTS_BASE_DIR);
+    std::fs::create_dir_all(&events_base).ok();
+    let events_base_abs = std::fs::canonicalize(&events_base)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap().join(&events_base));
+
+    let mut binds = vec![format!("{}:/data/events", events_base_abs.display())];
+    let mut extra_env = vec!["EVENTS_DIR=/data/events".to_string()];
+
+    if let Some(path) = keypair_path {
         let abs_path = std::fs::canonicalize(path).expect("Failed to canonicalize keypair path");
-        (
-            Some(vec![format!("{}:/tmp/wallet.json:ro", abs_path.display())]),
-            vec!["WALLET_PRIVATE_KEY_PATH=/tmp/wallet.json".to_string()],
-        )
-    } else {
-        (None, vec![])
-    };
+        binds.push(format!("{}:/tmp/wallet.json:ro", abs_path.display()));
+        extra_env.push("WALLET_PRIVATE_KEY_PATH=/tmp/wallet.json".to_string());
+    }
 
     let host_config = if has_gpu {
         // Setting nvidia usage parameters
@@ -163,14 +175,14 @@ pub async fn spawn_new_client(
             device_requests: Some(vec![device_request]),
             extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
             network_mode: Some(network_name.to_string()),
-            binds,
+            binds: Some(binds),
             ..Default::default()
         }
     } else {
         HostConfig {
             extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
             network_mode: Some(network_name.to_string()),
-            binds,
+            binds: Some(binds),
             ..Default::default()
         }
     };
@@ -249,21 +261,37 @@ pub async fn get_container_names(docker_client: Arc<Docker>) -> (Vec<String>, Ve
     (all_container_names, running_containers)
 }
 
+/// Check that containers 1..=num_clients are still running.
+pub async fn check_clients_alive(docker: Arc<Docker>, num_clients: u8) -> Result<(), String> {
+    for i in 1..=num_clients {
+        check_client_alive_by_name(docker.clone(), &format!("{CLIENT_CONTAINER_PREFIX}-{i}"))
+            .await?;
+    }
+    Ok(())
+}
+
+/// Check that a specific container is still running.
+pub async fn check_client_alive_by_name(docker: Arc<Docker>, name: &str) -> Result<(), String> {
+    let info = docker
+        .inspect_container(name, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let state = info.state.ok_or_else(|| format!("No state for {name}"))?;
+    match state.status {
+        Some(bollard::secret::ContainerStateStatusEnum::DEAD)
+        | Some(bollard::secret::ContainerStateStatusEnum::EXITED) => {
+            Err(format!("Client {name} has crashed"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Spawn a new client container. The EventReader will auto-discover its events
+/// directory, so no explicit monitoring registration is needed.
 pub async fn spawn_new_client_with_monitoring(
     docker: Arc<Docker>,
-    watcher: &DockerWatcher,
 ) -> Result<String, DockerWatcherError> {
-    let container_id = spawn_new_client(docker.clone(), None).await.unwrap();
-    let _monitor_client_2 = watcher
-        .monitor_container(
-            &container_id,
-            vec![
-                IntegrationTestLogMarker::LoadedModel,
-                IntegrationTestLogMarker::StateChange,
-                IntegrationTestLogMarker::Loss,
-            ],
-        )
-        .unwrap();
+    let container_id = spawn_new_client(docker, None).await.unwrap();
     println!("Spawned client {container_id}");
     Ok(container_id)
 }

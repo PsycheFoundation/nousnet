@@ -188,7 +188,7 @@ event!(train::LossComputed {
            RunStarted {
                run_id: env::var("RUN_ID").unwrap(),
                node_id: env::var("NODE_ID").unwrap(),
-               config: env::var("CONFIG_HASH").unwrap(),
+               config: env::var("CONFIG").unwrap(),
                psyche_version: env!("CARGO_PKG_VERSION").into(),
            }
        )?),

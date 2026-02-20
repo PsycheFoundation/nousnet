@@ -12,6 +12,9 @@ services:
       - '../../config/client/.env.local'
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
+      - EVENTS_DIR=/data/events
+    volumes:
+      - ./data/events:/data/events
     networks:
       - psyche-test-network
 

@@ -1,5 +1,8 @@
+pub mod coordinator_source;
 pub mod events;
+pub mod projection;
 pub mod store;
+pub mod timeline;
 
 pub use events::*;
 pub use store::{Backend, EventStore, FileBackend, InMemoryBackend};
