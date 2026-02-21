@@ -22,12 +22,20 @@ impl<'a> Widget for NodeListWidget<'a> {
         {
             let is_selected = self.selected_node_idx.is_none();
             let prefix = if is_selected { "► " } else { "  " };
-            buf.set_string(
-                inner.x,
-                inner.y,
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            let label = format!(
+                "{:<width$}",
                 prefix.to_owned() + "all nodes",
-                Style::new(),
+                width = inner.width as usize
             );
+            buf.set_string(inner.x, inner.y, &label, style);
         }
         let max_name = inner.width.saturating_sub(2) as usize;
 
@@ -52,11 +60,14 @@ impl<'a> Widget for NodeListWidget<'a> {
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Cyan)
+                    .bg(Color::DarkGray)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
 
+            // Pad to full width so the background covers the entire row.
+            let label = format!("{:<width$}", label, width = inner.width as usize);
             let label: String = label.chars().take(inner.width as usize).collect();
             buf.set_string(inner.x, y, &label, style);
         }
