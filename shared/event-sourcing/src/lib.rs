@@ -7,38 +7,38 @@ pub mod timeline;
 pub use events::*;
 pub use store::{Backend, EventStore, FileBackend, InMemoryBackend};
 
-mod bytes_visitor;
-
 pub use chrono::Utc;
 
 /// Emit an event to the global event store
 #[macro_export]
 macro_rules! event {
-    // event!(whatever, timestamp, [tag1, tag2])
-    ($event:expr, $timestamp:expr, [$($tags:expr),* $(,)?]) => {{
+    // event!(whatever, timestamp, Tags {field: val, ...})
+    ($event:expr, $timestamp:expr, Tags {$($field:ident : $val:expr),* $(,)?}) => {{
         #[allow(unused_imports)]
         use $crate::events::*;
-        $crate::EventStore::emit(($event).into(), $timestamp, vec![$($tags),*]);
+        let tags = Tags { $($field: Some($val),)* ..Tags::default() };
+        $crate::EventStore::emit(($event).into(), $timestamp, tags);
     }};
 
-    // event!(whatever, [tag1, tag2])
-    ($event:expr, [$($tags:expr),* $(,)?]) => {{
+    // event!(whatever, Tags {field: val, ...})
+    ($event:expr, Tags {$($field:ident : $val:expr),* $(,)?}) => {{
         #[allow(unused_imports)]
         use $crate::events::*;
-        $crate::EventStore::emit(($event).into(), $crate::Utc::now(), vec![$($tags),*]);
+        let tags = Tags { $($field: Some($val),)* ..Tags::default() };
+        $crate::EventStore::emit(($event).into(), $crate::Utc::now(), tags);
     }};
 
     // event!(whatever, timestamp)
     ($event:expr, $timestamp:expr) => {{
         #[allow(unused_imports)]
         use $crate::events::*;
-        $crate::EventStore::emit(($event).into(), $timestamp, vec![]);
+        $crate::EventStore::emit(($event).into(), $timestamp, Tags::default());
     }};
 
     // event!(whatever)
     ($event:expr) => {{
         #[allow(unused_imports)]
         use $crate::events::*;
-        $crate::EventStore::emit(($event).into(), $crate::Utc::now(), vec![]);
+        $crate::EventStore::emit(($event).into(), $crate::Utc::now(), Tags::default());
     }};
 }

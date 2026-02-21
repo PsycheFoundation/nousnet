@@ -3,14 +3,12 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use derive_more::Display;
 use first_class_variants::first_class_variants;
-use iroh::EndpointId as IrohEndpointId;
-use iroh_blobs::Hash as IrohHash;
+use iroh::EndpointId;
+use iroh_blobs::Hash as BlobHash;
 use psyche_coordinator::model::Checkpoint;
 use psyche_coordinator::{ClientState, RunState};
 use psyche_core::BatchId;
 use serde::{Deserialize, Serialize};
-
-use crate::bytes_visitor::BytesVisitor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 pub enum SubscriptionStatus {
@@ -26,77 +24,22 @@ pub enum ErrorKind {
     Unknown,
 }
 
-// Wrapper types for iroh types that don't implement serde
-// We serialize them as byte arrays for compactness
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EndpointId(pub IrohEndpointId);
-
-impl Serialize for EndpointId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // EndpointId derefs to [u8; 32]
-        serializer.serialize_bytes(&*self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for EndpointId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let bytes = deserializer.deserialize_bytes(BytesVisitor::<32>)?;
-        IrohEndpointId::from_bytes(&bytes)
-            .map(EndpointId)
-            .map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Hash(pub IrohHash);
-
-impl Serialize for Hash {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_bytes(self.0.as_bytes())
-    }
-}
-
-impl<'de> Deserialize<'de> for Hash {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let bytes = deserializer.deserialize_bytes(BytesVisitor::<32>)?;
-        Ok(Hash(IrohHash::from_bytes(bytes)))
-    }
-}
-
-/// Tags to link related events
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
-pub enum Tag {
-    #[display("blob_upload:{_0}")]
-    BlobUpload(u64),
-    #[display("blob_download:{_0}")]
-    BlobDownload(u64),
-    #[display("batch:{_0:?}")]
-    BatchId(BatchId),
-    #[display("blob:{_0:?}")]
-    Blob(Hash),
-    #[display("checkpoint_download:{_0}")]
-    CheckpointDownload(u64),
-    #[display("event_submission:{_0}")]
-    EventSubmission(u64),
+/// Tags link an event to the broader operation it belongs to.
+/// Each field is `None` when the event is not part of that operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Tags {
+    pub blob_upload: Option<u64>,
+    pub blob_download: Option<u64>,
+    pub batch_id: Option<BatchId>,
+    pub blob: Option<BlobHash>,
+    pub checkpoint_download: Option<u64>,
+    pub coordinator_call: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub timestamp: DateTime<Utc>,
-    pub tags: Vec<Tag>,
+    pub tags: Tags,
     pub data: EventData,
 }
 
@@ -199,6 +142,11 @@ pub enum P2P {
         endpoint_id: EndpointId,
         connection_path: Option<psyche_metrics::SelectedPath>,
     },
+    #[display("latency to {endpoint_id} changed: {latency_ms}ms")]
+    ConnectionLatencyChanged {
+        endpoint_id: EndpointId,
+        latency_ms: u64,
+    },
     #[display("gossip neighbors changed")]
     GossipNeighborsChanged {
         removed_neighbors: Vec<EndpointId>,
@@ -206,28 +154,24 @@ pub enum P2P {
     },
     #[display("gossip lagged")]
     GossipLagged,
-    #[display("latency changed: {latency_ms}ms")]
-    ConnectionLatencyChanged {
-        endpoint_id: EndpointId,
-        latency_ms: u64,
-    },
-    #[display("blob added to store")]
-    BlobAddedToStore { hash: Hash },
-    #[display("blob upload started: {size_bytes}B retry={retry_number}")]
+    #[display("blob made available for upload")]
+    BlobAddedToStore,
+    #[display("blob upload started: {size_bytes}B")]
     BlobUploadStarted {
         to_endpoint_id: EndpointId,
         size_bytes: u64,
-        retry_number: u32,
     },
     #[display("blob upload progress: {bytes_transferred}B")]
     BlobUploadProgress { bytes_transferred: u64 },
     #[display("blob upload completed")]
     BlobUploadCompleted(Result<(), String>),
-    #[display("blob download started: {size_bytes}B retry={retry_number}")]
+
+    #[display("blob download requested")]
+    BlobDownloadRequested,
+    #[display("blob download started from {remote_id}: {size_bytes}B")]
     BlobDownloadStarted {
-        from_endpoint_id: EndpointId,
+        remote_id: EndpointId,
         size_bytes: u64,
-        retry_number: u32,
     },
     #[display("blob download progress: {bytes_transferred}B")]
     BlobDownloadProgress { bytes_transferred: u64 },
@@ -308,7 +252,7 @@ pub enum Train {
 #[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum Warmup {
     #[display("p2p param info request")]
-    P2PParamInfoRequest { from: IrohEndpointId },
+    P2PParamInfoRequest { from: EndpointId },
     #[display("p2p param info response")]
     P2PParamInfoResponse,
 

@@ -567,7 +567,7 @@ where
         self.download_manager
             .add(ticket, tag.clone(), rx, download_type.clone());
         debug!(name: "blob_download_start", hash = %ticket_hash.fmt_short(), "started downloading blob {}", ticket_hash);
-
+        event!(p2p::BlobDownloadRequested, Tags { blob: ticket_hash });
         let latency_sorted = LatencySorted::new(
             std::iter::once(provider_endpoint_id.id)
                 .chain(additional_peers_to_try.iter().cloned())
@@ -857,7 +857,7 @@ fn parse_gossip_event<BroadcastMessage: Networkable>(
             debug!(name: "gossip_new_peer", endpoint_id=%endpoint_id, all_gossip_peers = ?peers, "gossip connected to new peer {endpoint_id}, we now have {} peers", peers.len());
             metrics.update_p2p_gossip_neighbors(&peers);
             event!(p2p::GossipNeighborsChanged {
-                new_neighbors: vec![EndpointId(endpoint_id)],
+                new_neighbors: vec![endpoint_id],
                 removed_neighbors: vec![]
             });
         }
@@ -867,7 +867,7 @@ fn parse_gossip_event<BroadcastMessage: Networkable>(
             metrics.update_p2p_gossip_neighbors(&peers);
             event!(p2p::GossipNeighborsChanged {
                 new_neighbors: vec![],
-                removed_neighbors: vec![EndpointId(endpoint_id)]
+                removed_neighbors: vec![endpoint_id]
             });
         }
         Ok(iroh_gossip::api::Event::Lagged) => {

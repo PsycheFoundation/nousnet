@@ -1,36 +1,27 @@
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
+use iroh::EndpointId;
 use psyche_coordinator::{RunState, model::Checkpoint};
 use psyche_core::BatchId;
 use psyche_metrics::SelectedPath;
 use std::collections::{BTreeMap, HashSet};
 
 use crate::events::{
-    Client, Cooldown, EndpointId, ErrorKind, Event, EventData, P2P, ResourceSnapshot, Tag, Train,
-    Warmup,
+    Client, Cooldown, ErrorKind, Event, EventData, P2P, ResourceSnapshot, Train, Warmup,
 };
 
 // ── Tag helpers ───────────────────────────────────────────────────────────────
 
 fn upload_tag(event: &Event) -> Option<u64> {
-    event.tags.iter().find_map(|t| match t {
-        Tag::BlobUpload(id) => Some(*id),
-        _ => None,
-    })
+    event.tags.blob_upload
 }
 
 fn download_tag(event: &Event) -> Option<u64> {
-    event.tags.iter().find_map(|t| match t {
-        Tag::BlobDownload(id) => Some(*id),
-        _ => None,
-    })
+    event.tags.blob_download
 }
 
 fn batch_id_tag(event: &Event) -> Option<BatchId> {
-    event.tags.iter().find_map(|t| match t {
-        Tag::BatchId(id) => Some(*id),
-        _ => None,
-    })
+    event.tags.batch_id
 }
 
 // ── Coordinator ───────────────────────────────────────────────────────────────
@@ -96,7 +87,6 @@ pub struct BlobTransfer {
     pub peer_endpoint_id: EndpointId,
     pub size_bytes: u64,
     pub bytes_transferred: u64,
-    pub retry_number: u32,
     /// None = in progress, Some(Ok(())) = success, Some(Err(s)) = failed.
     pub result: Option<Result<(), String>>,
 }
@@ -455,7 +445,7 @@ impl ClusterProjection {
                             .get(&cc.endpoint_id)
                             .and_then(|p| p.latency_ms);
                         node.p2p.peers.insert(
-                            cc.endpoint_id.clone(),
+                            cc.endpoint_id,
                             PeerInfo {
                                 connection_path: cc.connection_path.clone(),
                                 latency_ms: existing_latency,
@@ -467,7 +457,7 @@ impl ClusterProjection {
                             node.p2p.gossip_neighbors.remove(removed);
                         }
                         for added in &gnc.new_neighbors {
-                            node.p2p.gossip_neighbors.insert(added.clone());
+                            node.p2p.gossip_neighbors.insert(*added);
                         }
                     }
                     P2P::GossipLagged(_) => {
@@ -481,15 +471,17 @@ impl ClusterProjection {
                     P2P::BlobAddedToStore(_) => {
                         node.p2p.blobs_in_store += 1;
                     }
-                    P2P::BlobUploadStarted(bus) => {
+                    P2P::BlobUploadStarted(crate::p2p::BlobUploadStarted {
+                        to_endpoint_id,
+                        size_bytes,
+                    }) => {
                         if let Some(tag_id) = upload_tag(event) {
                             node.p2p.uploads.insert(
                                 tag_id,
                                 BlobTransfer {
-                                    peer_endpoint_id: bus.to_endpoint_id.clone(),
-                                    size_bytes: bus.size_bytes,
+                                    peer_endpoint_id: *to_endpoint_id,
+                                    size_bytes: *size_bytes,
                                     bytes_transferred: 0,
-                                    retry_number: bus.retry_number,
                                     result: None,
                                 },
                             );
@@ -514,10 +506,9 @@ impl ClusterProjection {
                             node.p2p.downloads.insert(
                                 tag_id,
                                 BlobTransfer {
-                                    peer_endpoint_id: bds.from_endpoint_id.clone(),
+                                    peer_endpoint_id: bds.remote_id,
                                     size_bytes: bds.size_bytes,
                                     bytes_transferred: 0,
-                                    retry_number: bds.retry_number,
                                     result: None,
                                 },
                             );
@@ -547,6 +538,7 @@ impl ClusterProjection {
                     P2P::GossipMessageReceived(_) => {
                         node.p2p.gossip_recv += 1;
                     }
+                    P2P::BlobDownloadRequested(_) => todo!(),
                 },
 
                 // ── ResourceSnapshot ─────────────────────────────────────────
@@ -711,18 +703,18 @@ impl Default for ClusterProjection {
 mod tests {
     use super::*;
     use crate::events::EventData;
-    use crate::{client, cooldown, train, warmup};
+    use crate::{Tags, client, cooldown, train, warmup};
     use chrono::Utc;
 
     fn make_event(data: EventData) -> Event {
         Event {
             timestamp: Utc::now(),
-            tags: vec![],
+            tags: Tags::default(),
             data,
         }
     }
 
-    fn make_event_with_tags(data: EventData, tags: Vec<Tag>) -> Event {
+    fn make_event_with_tags(data: EventData, tags: Tags) -> Event {
         Event {
             timestamp: Utc::now(),
             tags,
@@ -889,7 +881,10 @@ mod tests {
                 EventData::Train(crate::events::Train::BatchDataDownloadStart(
                     train::BatchDataDownloadStart { size_bytes: 4096 },
                 )),
-                vec![Tag::BatchId(batch_id)],
+                Tags {
+                    batch_id: Some(batch_id),
+                    ..Default::default()
+                },
             ),
         );
 
@@ -941,15 +936,15 @@ mod tests {
         let mut proj = ClusterProjection::new();
         let node_id = "node-7";
 
-        let ep1 = EndpointId(iroh::SecretKey::generate(&mut rand::rng()).public());
-        let ep2 = EndpointId(iroh::SecretKey::generate(&mut rand::rng()).public());
+        let ep1 = iroh::SecretKey::generate(&mut rand::rng()).public();
+        let ep2 = iroh::SecretKey::generate(&mut rand::rng()).public();
 
         proj.apply_node_event(
             node_id,
             &make_event(EventData::P2P(crate::events::P2P::GossipNeighborsChanged(
                 p2p::GossipNeighborsChanged {
                     removed_neighbors: vec![],
-                    new_neighbors: vec![ep1.clone(), ep2.clone()],
+                    new_neighbors: vec![ep1, ep2],
                 },
             ))),
         );
@@ -962,7 +957,7 @@ mod tests {
             node_id,
             &make_event(EventData::P2P(crate::events::P2P::GossipNeighborsChanged(
                 p2p::GossipNeighborsChanged {
-                    removed_neighbors: vec![ep1.clone()],
+                    removed_neighbors: vec![ep1],
                     new_neighbors: vec![],
                 },
             ))),

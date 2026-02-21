@@ -120,7 +120,7 @@ impl EventStore {
         Self::instance().write().backends = backends;
     }
 
-    pub fn emit(data: EventData, timestamp: DateTime<Utc>, tags: Vec<crate::Tag>) {
+    pub fn emit(data: EventData, timestamp: DateTime<Utc>, tags: crate::Tags) {
         let mut store = Self::instance().write();
         let event = Event {
             timestamp,
@@ -235,14 +235,14 @@ impl FileWriterState {
         // each file is self-contained with context
         let run_started = Event {
             timestamp: Utc::now(),
-            tags: vec![],
+            tags: crate::Tags::default(),
             data: EventData::RunStarted(run_context),
         };
         file.write_all(&postcard::to_stdvec_cobs(&run_started).map_err(std::io::Error::other)?)?;
 
         let epoch_started = Event {
             timestamp: Utc::now(),
-            tags: vec![],
+            tags: crate::Tags::default(),
             data: EventData::EpochStarted(EpochStarted {
                 epoch_number: epoch,
             }),
@@ -326,9 +326,9 @@ mod tests {
 
         event!(
             train::TrainingStarted,
-            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
-                1, 1,
-            )))]
+            Tags {
+                batch_id: psyche_core::BatchId(ClosedInterval::new(1, 1))
+            }
         );
 
         event!(
@@ -337,9 +337,9 @@ mod tests {
                 step: 1,
                 loss: Some(0.5),
             },
-            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
-                1, 1,
-            )))]
+            Tags {
+                batch_id: psyche_core::BatchId(ClosedInterval::new(1, 1))
+            }
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -404,9 +404,9 @@ mod tests {
 
         event!(
             train::TrainingStarted,
-            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
-                42, 42,
-            )))]
+            Tags {
+                batch_id: psyche_core::BatchId(ClosedInterval::new(42, 42))
+            }
         );
 
         event!(
@@ -415,9 +415,9 @@ mod tests {
                 step: 42,
                 loss: Some(0.123),
             },
-            [Tag::BatchId(psyche_core::BatchId(ClosedInterval::new(
-                42, 42,
-            )))]
+            Tags {
+                batch_id: psyche_core::BatchId(ClosedInterval::new(42, 42))
+            }
         );
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -456,18 +456,19 @@ mod tests {
 
         event!(
             p2p::BlobUploadStarted {
-                to_endpoint_id: EndpointId(iroh::EndpointId::from_bytes(&[0u8; 32]).unwrap()),
+                to_endpoint_id: iroh::EndpointId::from_bytes(&[0u8; 32]).unwrap(),
                 size_bytes: 1024,
-                retry_number: 0,
             },
-            [
-                Tag::BlobUpload(123),
-                Tag::Blob(Hash(iroh_blobs::Hash::from_bytes([1u8; 32]))),
-            ]
+            Tags {
+                blob_upload: 123,
+                blob: iroh_blobs::Hash::from_bytes([1u8; 32]),
+            }
         );
 
-        let tags = EventStore::with_backend::<InMemoryBackend, _, _>(|b| b.events()[0].tags.len());
-        assert_eq!(tags, Some(2));
+        let tags =
+            EventStore::with_backend::<InMemoryBackend, _, _>(|b| b.events()[0].tags.clone());
+        assert!(tags.as_ref().is_some_and(|t| t.blob_upload == Some(123)));
+        assert!(tags.as_ref().is_some_and(|t| t.blob.is_some()));
     }
 
     #[test]

@@ -101,7 +101,7 @@ impl ConnectionMonitor {
                         });
                     }
 
-                    event!(p2p::ConnectionChanged { endpoint_id: EndpointId(remote_id), connection_path: selected_path });
+                    event!(p2p::ConnectionChanged { endpoint_id: remote_id, connection_path: selected_path });
 
                     // spawn a task to monitor this connection continuously
                     let connections_clone = connections.clone();
@@ -142,7 +142,7 @@ impl ConnectionMonitor {
                                                     "selected path removed"
                                                 );
                                             }
-                                            event!(p2p::ConnectionChanged { endpoint_id: EndpointId(remote_id), connection_path: selected_path });
+                                            event!(p2p::ConnectionChanged { endpoint_id: remote_id, connection_path: selected_path });
 
                                         } else if latency_delta > 50 {
                                             if let Some(ref path) = selected_path {
@@ -152,7 +152,7 @@ impl ConnectionMonitor {
                                                     delta_ms = latency_delta,
                                                     "latency changed"
                                                 );
-                                                event!(p2p::ConnectionLatencyChanged { endpoint_id: EndpointId(remote_id), latency_ms: path.rtt.as_millis() as u64 });
+                                                event!(p2p::ConnectionLatencyChanged { endpoint_id: remote_id, latency_ms: path.rtt.as_millis() as u64 });
                                             }
                                         }
                                     }
