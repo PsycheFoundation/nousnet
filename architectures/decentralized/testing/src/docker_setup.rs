@@ -82,20 +82,6 @@ pub async fn e2e_testing_setup_with_min(
     DockerTestCleanup {}
 }
 
-pub async fn e2e_testing_setup_with_config(
-    docker_client: Arc<Docker>,
-    init_num_clients: usize,
-    configure: impl FnOnce(ConfigBuilder) -> ConfigBuilder,
-) -> DockerTestCleanup {
-    remove_old_client_containers(docker_client).await;
-
-    spawn_psyche_network_with_config(init_num_clients, init_num_clients, None, configure).unwrap();
-
-    spawn_ctrl_c_task();
-
-    DockerTestCleanup {}
-}
-
 pub async fn e2e_testing_setup_subscription(
     docker_client: Arc<Docker>,
     init_num_clients: usize,
@@ -293,31 +279,18 @@ pub fn spawn_psyche_network_with_min(
     min_clients: usize,
     owner_keypair_path: Option<&Path>,
 ) -> Result<(), DockerWatcherError> {
-    spawn_psyche_network_with_config(init_num_clients, min_clients, owner_keypair_path, |b| b)
-}
-
-pub fn spawn_psyche_network_with_config(
-    init_num_clients: usize,
-    min_clients: usize,
-    owner_keypair_path: Option<&Path>,
-    configure: impl FnOnce(ConfigBuilder) -> ConfigBuilder,
-) -> Result<(), DockerWatcherError> {
     #[cfg(not(feature = "python"))]
-    let config_file_path = configure(
-        ConfigBuilder::new()
-            .with_num_clients(init_num_clients)
-            .with_min_clients(min_clients),
-    )
-    .build();
+    let config_file_path = ConfigBuilder::new()
+        .with_num_clients(init_num_clients)
+        .with_min_clients(min_clients)
+        .build();
     #[cfg(feature = "python")]
-    let config_file_path = configure(
-        ConfigBuilder::new()
-            .with_num_clients(init_num_clients)
-            .with_min_clients(min_clients)
-            .with_architecture("HfAuto")
-            .with_batch_size(8 * std::cmp::max(init_num_clients, 1) as u32),
-    )
-    .build();
+    let config_file_path = ConfigBuilder::new()
+        .with_num_clients(init_num_clients)
+        .with_min_clients(min_clients)
+        .with_architecture("HfAuto")
+        .with_batch_size(8 * std::cmp::max(init_num_clients, 1) as u32)
+        .build();
 
     println!("[+] Config file written to: {}", config_file_path.display());
 
