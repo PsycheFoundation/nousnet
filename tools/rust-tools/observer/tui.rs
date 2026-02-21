@@ -12,10 +12,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style, Stylize},
     symbols,
-    widgets::Tabs,
+    widgets::{Block, Borders, Tabs},
 };
 
-use crate::app::{App, DetailPanel};
+use crate::app::{App, DetailPanel, EventCategory, FocusedBox};
 use crate::widgets::{
     batches::BatchesWidget, coordinator_bar::CoordinatorBarWidget, loss_graph::LossGraphWidget,
     node::NodeWidget, node_list::NodeListWidget, scrubber::ScrubberWidget,
@@ -47,36 +47,39 @@ pub fn run(mut app: App) -> io::Result<()> {
             let node_scroll = app.node_scroll;
             let file_stats = app.node_file_stats.clone();
             let detail_panel = app.detail_panel;
+            let focused_box = app.focused_box;
             let batch_scroll = app.batch_scroll;
-            let node_filter_owned: Option<String> =
-                selected.and_then(|i| snapshot.nodes.get_index(i).map(|(id, _)| id.clone()));
             let timeline = &app.timeline;
             let waterfall_zoom = app.waterfall_zoom;
             let waterfall_x_scroll = app.waterfall_x_scroll;
+            let waterfall_filter = app.waterfall_filter;
+            let all_node_ids = timeline.all_entity_ids();
+            let selected_node_id: Option<String> =
+                selected.and_then(|i| all_node_ids.get(i).cloned());
 
             terminal.draw(|f| {
                 let area = f.area();
                 let outer = outer_layout(area);
+
+                // ── Scrubber ──────────────────────────────────────────────────
+                f.render_widget(ScrubberWidget { timeline, cursor }, outer[0]);
+
+                // ── Separator ════════════════════════════════════════════════
+                let sep = outer[1];
+                for x in sep.x..sep.x + sep.width {
+                    f.buffer_mut()
+                        .set_string(x, sep.y, "═", Style::default().fg(Color::DarkGray));
+                }
 
                 // ── Coordinator bar ───────────────────────────────────────────
                 f.render_widget(
                     CoordinatorBarWidget {
                         snapshot: &snapshot,
                     },
-                    outer[0],
+                    outer[2],
                 );
 
-                // ── Scrubber ──────────────────────────────────────────────────
-                f.render_widget(ScrubberWidget { timeline, cursor }, outer[1]);
-
-                // ── Thick separator ═══════════════════════════════════════════
-                let sep = outer[2];
-                for x in sep.x..sep.x + sep.width {
-                    f.buffer_mut()
-                        .set_string(x, sep.y, "═", Style::default().fg(Color::DarkGray));
-                }
-
-                // ── Main area: node list (left) + tabbed panel (right) ────────
+                // ── Main: node list (left) + tabbed panel (right) ─────────────
                 let main = outer[3];
                 node_list_h = main.height as usize;
 
@@ -88,80 +91,118 @@ pub fn run(mut app: App) -> io::Result<()> {
                 let list_area = cols[0];
                 let right_area = cols[1];
 
-                // Always-visible node selector
+                // Node list — highlight border when focused
+                let list_border_color = if focused_box == FocusedBox::NodeList {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                };
                 f.render_widget(
                     NodeListWidget {
-                        nodes: &snapshot.nodes,
+                        node_ids: &all_node_ids,
                         selected_node_idx: selected,
                         node_scroll,
+                        focused: focused_box == FocusedBox::NodeList,
                     },
                     list_area,
                 );
+                // Override the node list border color (drawn by NodeListWidget).
+                // Draw a 1-char right-side border between list and right panel.
+                for y in list_area.y..list_area.y + list_area.height {
+                    f.buffer_mut().set_string(
+                        list_area.x + list_area.width.saturating_sub(1),
+                        y,
+                        "│",
+                        Style::default().fg(list_border_color),
+                    );
+                }
 
-                // Tabbed right panel
+                // Right panel border — highlight when detail panel is focused
+                let right_focused = matches!(
+                    focused_box,
+                    FocusedBox::Timeline
+                        | FocusedBox::Node
+                        | FocusedBox::Loss
+                        | FocusedBox::Batches
+                );
+                let right_border_color = if right_focused {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                };
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(right_border_color));
+                let inner = block.inner(right_area);
+                f.render_widget(block, right_area);
+
+                let snapshot_node_idx = selected_node_id
+                    .as_deref()
+                    .and_then(|id| snapshot.nodes.get_index_of(id));
+
                 match detail_panel {
                     DetailPanel::Node => f.render_widget(
                         NodeWidget {
                             snapshot: &snapshot,
-                            selected_node_idx: selected,
+                            selected_node_idx: snapshot_node_idx,
                             file_stats: &file_stats,
                         },
-                        right_area,
+                        inner,
                     ),
                     DetailPanel::Loss => f.render_widget(
                         LossGraphWidget {
                             nodes: &snapshot.nodes,
                         },
-                        right_area,
+                        inner,
                     ),
                     DetailPanel::Batches => f.render_widget(
                         BatchesWidget {
                             snapshot: &snapshot,
-                            selected_node_id: node_filter_owned.as_deref(),
+                            selected_node_id: selected_node_id.as_deref(),
                             scroll: batch_scroll,
                         },
-                        right_area,
+                        inner,
                     ),
                     DetailPanel::Timeline => f.render_widget(
                         WaterfallWidget {
                             timeline,
                             cursor,
-                            nodes: &snapshot.nodes,
+                            node_ids: &all_node_ids,
                             selected_node_idx: selected,
                             node_scroll,
                             zoom: waterfall_zoom,
                             x_scroll: waterfall_x_scroll,
+                            filter: waterfall_filter,
                         },
-                        right_area,
+                        inner,
                     ),
                 }
 
-                // Overlay tabs on the right panel's top border row
+                // Tabs overlay on right panel top border
                 let tab_idx = match detail_panel {
                     DetailPanel::Timeline => 0,
                     DetailPanel::Node => 1,
                     DetailPanel::Loss => 2,
                     DetailPanel::Batches => 3,
                 };
-                let tabs_area = ratatui::layout::Rect {
-                    x: right_area.x + 1,
-                    y: right_area.y,
-                    width: right_area.width.saturating_sub(2),
-                    height: 1,
-                };
                 f.render_widget(
-                    Tabs::new(vec!["TIMELINE", "NODE", "LOSS", "BATCHES"])
+                    Tabs::new(vec!["[3] TIMELINE", "[4] NODE", "[5] LOSS", "[6] BATCHES"])
                         .select(tab_idx)
                         .style(Style::default().fg(Color::DarkGray))
                         .highlight_style(Style::default().yellow().bold())
                         .divider(symbols::DOT)
                         .padding(" ", " "),
-                    tabs_area,
+                    ratatui::layout::Rect {
+                        x: right_area.x + 1,
+                        y: right_area.y,
+                        width: right_area.width.saturating_sub(2),
+                        height: 1,
+                    },
                 );
             })?;
         }
 
-        // Handle input
+        // ── Input ─────────────────────────────────────────────────────────────
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or(Duration::ZERO);
@@ -169,8 +210,43 @@ pub fn run(mut app: App) -> io::Result<()> {
         if event::poll(timeout)?
             && let Event::Key(key) = event::read()?
         {
+            // Category filter keys only active when timeline is focused.
+            let timeline_focused = app.focused_box == FocusedBox::Timeline;
+
+            if timeline_focused {
+                let cat = match key.code {
+                    KeyCode::Char('e') => Some(EventCategory::Error),
+                    KeyCode::Char('t') => Some(EventCategory::Train),
+                    KeyCode::Char('w') => Some(EventCategory::Warmup),
+                    KeyCode::Char('c') => Some(EventCategory::Cooldown),
+                    KeyCode::Char('p') => Some(EventCategory::P2P),
+                    KeyCode::Char('l') => Some(EventCategory::Client),
+                    KeyCode::Char('o') => Some(EventCategory::Coordinator),
+                    _ => None,
+                };
+                if let Some(cat) = cat {
+                    app.toggle_category_filter(cat);
+                    continue;
+                }
+            }
+
             match (key.code, key.modifiers) {
                 (KeyCode::Char('q'), _) => break,
+
+                // ── Box focus (numbers) ──────────────────────────────────────
+                (KeyCode::Char('1'), KeyModifiers::NONE) => app.focus_box(FocusedBox::Scrubber),
+                (KeyCode::Char('2'), KeyModifiers::NONE) => app.focus_box(FocusedBox::NodeList),
+                (KeyCode::Char('3'), KeyModifiers::NONE) => app.focus_box(FocusedBox::Timeline),
+                (KeyCode::Char('4'), KeyModifiers::NONE) => app.focus_box(FocusedBox::Node),
+                (KeyCode::Char('5'), KeyModifiers::NONE) => app.focus_box(FocusedBox::Loss),
+                (KeyCode::Char('6'), KeyModifiers::NONE) => app.focus_box(FocusedBox::Batches),
+
+                // ── Playback speed (Shift+1/2/3) ─────────────────────────────
+                (KeyCode::Char('!'), _) => app.set_speed(1),
+                (KeyCode::Char('@'), _) => app.set_speed(5),
+                (KeyCode::Char('#'), _) => app.set_speed(20),
+
+                // ── Scrub ────────────────────────────────────────────────────
                 (KeyCode::Char('g'), KeyModifiers::NONE) => app.go_first(),
                 (KeyCode::Char('G'), _) | (KeyCode::Char('g'), KeyModifiers::SHIFT) => {
                     app.go_last()
@@ -179,21 +255,25 @@ pub fn run(mut app: App) -> io::Result<()> {
                 (KeyCode::Right, KeyModifiers::SHIFT) => app.step_forward(50),
                 (KeyCode::Left, _) => app.step_backward(1),
                 (KeyCode::Right, _) => app.step_forward(1),
-                (KeyCode::Up, _) if app.detail_panel == DetailPanel::Batches => {
+
+                // ── ↑/↓ routed by focused box ────────────────────────────────
+                (KeyCode::Up, _) if app.focused_box == FocusedBox::Batches => {
                     app.scroll_batches_up()
                 }
-                (KeyCode::Down, _) if app.detail_panel == DetailPanel::Batches => {
+                (KeyCode::Down, _) if app.focused_box == FocusedBox::Batches => {
                     app.scroll_batches_down()
                 }
                 (KeyCode::Up, _) => app.prev_node(),
                 (KeyCode::Down, _) => app.next_node(),
+
+                // ── Tab still cycles panels ───────────────────────────────────
                 (KeyCode::Tab, _) => app.cycle_detail_panel(),
+
+                // ── Playback / zoom ───────────────────────────────────────────
                 (KeyCode::Char(' '), _) => app.toggle_play(),
-                (KeyCode::Char('1'), _) => app.set_speed(1),
-                (KeyCode::Char('2'), _) => app.set_speed(5),
-                (KeyCode::Char('3'), _) => app.set_speed(20),
                 (KeyCode::Char('['), _) => app.zoom_in(),
                 (KeyCode::Char(']'), _) => app.zoom_out(),
+
                 _ => {}
             }
         }
@@ -214,9 +294,9 @@ fn outer_layout(area: ratatui::layout::Rect) -> std::rc::Rc<[ratatui::layout::Re
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // coordinator bar
-            Constraint::Length(4), // scrubber
+            Constraint::Length(3), // scrubber
             Constraint::Length(1), // separator ═══
+            Constraint::Length(2), // coordinator bar
             Constraint::Min(1),    // main area
         ])
         .split(area)

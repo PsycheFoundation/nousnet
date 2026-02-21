@@ -24,26 +24,20 @@ impl<'a> Widget for NodeWidget<'a> {
             .selected_node_idx
             .and_then(|i| self.snapshot.nodes.get_index(i));
 
-        let block = Block::default().borders(Borders::ALL);
-        let inner = block.inner(area);
-        block.render(area, buf);
-
         let Some((id, node)) = node_entry else {
             let msg = if self.selected_node_idx.is_none() {
                 "Use ↑/↓ to select a node"
             } else {
                 "No nodes"
             };
-            Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
-                .centered()
-                .render(
-                    Rect {
-                        y: inner.y + inner.height / 2,
-                        height: 1,
-                        ..inner
-                    },
-                    buf,
-                );
+            Paragraph::new(msg).render(
+                Rect {
+                    y: area.y + area.height / 2,
+                    height: 1,
+                    ..area
+                },
+                buf,
+            );
             return;
         };
 
@@ -85,12 +79,12 @@ impl<'a> Widget for NodeWidget<'a> {
                 (0.0, format!("{} bytes", warmup.download_bytes))
             };
 
-            let gauge_row = inner.y + lines.len() as u16;
-            if gauge_row < inner.y + inner.height {
+            let gauge_row = area.y + lines.len() as u16;
+            if gauge_row < area.y + area.height {
                 let gauge_area = Rect {
-                    x: inner.x,
+                    x: area.x,
                     y: gauge_row,
-                    width: inner.width,
+                    width: area.width,
                     height: 1,
                 };
                 Gauge::default()
@@ -156,6 +150,6 @@ impl<'a> Widget for NodeWidget<'a> {
             ]));
         }
 
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines).render(area, buf);
     }
 }

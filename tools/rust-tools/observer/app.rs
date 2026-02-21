@@ -6,12 +6,25 @@ use indexmap::IndexMap;
 use psyche_event_sourcing::projection::ClusterSnapshot;
 use psyche_event_sourcing::timeline::ClusterTimeline;
 
+pub use crate::widgets::waterfall::EventCategory;
+
 #[derive(Debug, Clone, Default)]
 pub struct NodeFileStats {
     /// Total bytes of all .postcard files on disk for this node.
     pub total_bytes: u64,
     /// Lifetime average write rate: total_bytes / elapsed_since_first_seen.
     pub bytes_per_sec: f64,
+}
+
+/// Which panel/box currently has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedBox {
+    Scrubber, // 1
+    NodeList, // 2
+    Timeline, // 3
+    Node,     // 4
+    Loss,     // 5
+    Batches,  // 6
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,11 +59,14 @@ pub struct App {
     /// Live file-size stats per node_id, refreshed every tick.
     pub node_file_stats: IndexMap<String, NodeFileStats>,
     pub detail_panel: DetailPanel,
+    pub focused_box: FocusedBox,
     pub batch_scroll: usize,
     /// Number of timeline entries visible at once in the waterfall x-axis.
     pub waterfall_zoom: usize,
     /// Index of the first timeline entry visible in the waterfall window.
     pub waterfall_x_scroll: usize,
+    /// When set, the waterfall only shows events of this category.
+    pub waterfall_filter: Option<EventCategory>,
     cached_snapshot: Option<(usize, ClusterSnapshot)>,
     /// Tracks when each node was first observed for lifetime bps calculation.
     node_first_seen: HashMap<String, Instant>,
@@ -98,9 +114,11 @@ impl App {
             events_dir,
             node_file_stats: IndexMap::new(),
             detail_panel: DetailPanel::Timeline,
+            focused_box: FocusedBox::Timeline,
             batch_scroll: 0,
             waterfall_zoom: 20,
             waterfall_x_scroll: 0,
+            waterfall_filter: None,
             cached_snapshot: None,
             node_first_seen: HashMap::new(),
         }
@@ -134,7 +152,7 @@ impl App {
 
     /// Select next node (↓). Cycles: None → 0 → 1 → … → last → None.
     pub fn next_node(&mut self) {
-        let count = self.current_snapshot().nodes.len();
+        let count = self.timeline.all_entity_ids().len();
         if count == 0 {
             self.selected_node_idx = None;
             return;
@@ -148,7 +166,7 @@ impl App {
 
     /// Select previous node (↑). Cycles: None → last → … → 0 → None.
     pub fn prev_node(&mut self) {
-        let count = self.current_snapshot().nodes.len();
+        let count = self.timeline.all_entity_ids().len();
         if count == 0 {
             self.selected_node_idx = None;
             return;
@@ -194,8 +212,17 @@ impl App {
         self.ensure_cursor_visible();
     }
 
-    /// Adjust `waterfall_x_scroll` so the cursor stays within the visible window.
+    /// Adjust `waterfall_x_scroll` so the cursor stays within the visible window,
+    /// and the window is always as full as possible (no empty space at the right).
     pub fn ensure_cursor_visible(&mut self) {
+        let total = self.timeline.len();
+
+        // Pull x_scroll left if there is room to the left that isn't being shown.
+        // This makes zoom work correctly near the right end of the timeline.
+        let max_scroll = total.saturating_sub(self.waterfall_zoom);
+        self.waterfall_x_scroll = self.waterfall_x_scroll.min(max_scroll);
+
+        // Then make sure the cursor itself is within the window.
         if self.cursor < self.waterfall_x_scroll {
             self.waterfall_x_scroll = self.cursor;
         } else if self.waterfall_zoom > 0
@@ -203,6 +230,27 @@ impl App {
         {
             self.waterfall_x_scroll = self.cursor + 1 - self.waterfall_zoom;
         }
+    }
+
+    /// Focus a box by number key and also switch the detail panel when relevant.
+    pub fn focus_box(&mut self, b: FocusedBox) {
+        self.focused_box = b;
+        match b {
+            FocusedBox::Timeline => self.detail_panel = DetailPanel::Timeline,
+            FocusedBox::Node => self.detail_panel = DetailPanel::Node,
+            FocusedBox::Loss => self.detail_panel = DetailPanel::Loss,
+            FocusedBox::Batches => self.detail_panel = DetailPanel::Batches,
+            FocusedBox::Scrubber | FocusedBox::NodeList => {}
+        }
+    }
+
+    /// Toggle a category filter on the waterfall (press same key again to clear).
+    pub fn toggle_category_filter(&mut self, cat: EventCategory) {
+        self.waterfall_filter = if self.waterfall_filter == Some(cat) {
+            None
+        } else {
+            Some(cat)
+        };
     }
 
     pub fn cycle_detail_panel(&mut self) {

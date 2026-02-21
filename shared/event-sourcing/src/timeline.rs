@@ -407,6 +407,19 @@ impl ClusterTimeline {
         &self.entries
     }
 
+    /// All entity IDs that appear anywhere in the timeline, in order of first appearance.
+    pub fn all_entity_ids(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        self.entries
+            .iter()
+            .map(|e| match e {
+                TimelineEntry::Node { node_id, .. } => node_id.clone(),
+                TimelineEntry::Coordinator { .. } => "coordinator".to_string(),
+            })
+            .filter(|id| seen.insert(id.clone()))
+            .collect()
+    }
+
     pub fn timestamp_range(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let first = self.entries.first()?.timestamp();
         let last = self.entries.last()?.timestamp();

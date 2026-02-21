@@ -14,10 +14,6 @@ pub struct ScrubberWidget<'a> {
 
 impl<'a> Widget for ScrubberWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default().borders(Borders::TOP);
-        let inner = block.inner(area);
-        block.render(area, buf);
-
         let total = self.timeline.len();
         let entries = self.timeline.entries();
 
@@ -37,7 +33,7 @@ impl<'a> Widget for ScrubberWidget<'a> {
             };
 
         // ── Scrubber bar ───────────────────────────────────────────────────────
-        let bar_width = inner.width.saturating_sub(4) as usize;
+        let bar_width = area.width.saturating_sub(4) as usize;
         let pos = if total > 1 && bar_width > 0 {
             (self.cursor * bar_width / (total - 1)).min(bar_width)
         } else {
@@ -62,7 +58,7 @@ impl<'a> Widget for ScrubberWidget<'a> {
         let count_str = format!("{}/{}", self.cursor + 1, total);
         let ts_mid = format!("{}  {}", ts_cursor, count_str);
         let side_width = (ts_start.len() + ts_end.len()) as u16;
-        let mid_width = inner.width.saturating_sub(side_width) as usize;
+        let mid_width = area.width.saturating_sub(side_width) as usize;
         lines.push(Line::from(vec![
             Span::styled(&ts_start, Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{:^width$}", ts_mid, width = mid_width)),
@@ -71,12 +67,12 @@ impl<'a> Widget for ScrubberWidget<'a> {
 
         // ── Keybinds ───────────────────────────────────────────────────────────
         lines.push(Line::from(Span::styled(
-            "[←/→] step  [Shift+←/→] ×50  [Space] play  [↑/↓] node  [1/2/3] speed  [g/G] first/last  [q] quit",
+            "[←/→] step  [Shift+←/→] ×50  [Space] play  [↑/↓] node  [1/2/3] speed  [g/G] first/last  [[/]] zoom  [q] quit",
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),
         )));
 
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines).render(area, buf);
     }
 }
