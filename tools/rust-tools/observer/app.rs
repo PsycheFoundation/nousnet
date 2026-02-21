@@ -16,17 +16,19 @@ pub struct NodeFileStats {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailPanel {
+    Timeline,
     Node,
-    Batches,
     Loss,
+    Batches,
 }
 
 impl DetailPanel {
     pub fn next(self) -> DetailPanel {
         match self {
+            DetailPanel::Timeline => DetailPanel::Node,
             DetailPanel::Node => DetailPanel::Loss,
             DetailPanel::Loss => DetailPanel::Batches,
-            DetailPanel::Batches => DetailPanel::Node,
+            DetailPanel::Batches => DetailPanel::Timeline,
         }
     }
 }
@@ -36,14 +38,19 @@ pub struct App {
     pub cursor: usize,
     /// None = "all nodes" view; Some(i) = node at index i in snapshot.nodes.
     pub selected_node_idx: Option<usize>,
+    /// Vertical scroll offset for the node/waterfall rows.
+    pub node_scroll: usize,
     pub playing: bool,
     pub speed: u64,
     pub events_dir: PathBuf,
     /// Live file-size stats per node_id, refreshed every tick.
     pub node_file_stats: IndexMap<String, NodeFileStats>,
     pub detail_panel: DetailPanel,
-    /// Scroll offset for the batch table (data rows, not counting section headers).
     pub batch_scroll: usize,
+    /// Number of timeline entries visible at once in the waterfall x-axis.
+    pub waterfall_zoom: usize,
+    /// Index of the first timeline entry visible in the waterfall window.
+    pub waterfall_x_scroll: usize,
     cached_snapshot: Option<(usize, ClusterSnapshot)>,
     /// Tracks when each node was first observed for lifetime bps calculation.
     node_first_seen: HashMap<String, Instant>,
@@ -85,12 +92,15 @@ impl App {
             timeline,
             cursor: len.saturating_sub(1),
             selected_node_idx: None,
+            node_scroll: 0,
             playing: false,
             speed: 1,
             events_dir,
             node_file_stats: IndexMap::new(),
-            detail_panel: DetailPanel::Node,
+            detail_panel: DetailPanel::Timeline,
             batch_scroll: 0,
+            waterfall_zoom: 20,
+            waterfall_x_scroll: 0,
             cached_snapshot: None,
             node_first_seen: HashMap::new(),
         }
@@ -150,12 +160,49 @@ impl App {
         };
     }
 
+    /// Adjust `node_scroll` so the selected node is within the visible viewport.
+    pub fn ensure_node_visible(&mut self, viewport_h: usize) {
+        if viewport_h == 0 {
+            return;
+        }
+        if let Some(idx) = self.selected_node_idx {
+            if idx < self.node_scroll {
+                self.node_scroll = idx;
+            } else if idx >= self.node_scroll + viewport_h {
+                self.node_scroll = idx + 1 - viewport_h;
+            }
+        }
+    }
+
     pub fn toggle_play(&mut self) {
         self.playing = !self.playing;
     }
 
     pub fn set_speed(&mut self, speed: u64) {
         self.speed = speed;
+    }
+
+    /// Zoom in: halve the number of visible events (min 5).
+    pub fn zoom_in(&mut self) {
+        self.waterfall_zoom = (self.waterfall_zoom / 2).max(5);
+        self.ensure_cursor_visible();
+    }
+
+    /// Zoom out: double the number of visible events.
+    pub fn zoom_out(&mut self) {
+        self.waterfall_zoom = (self.waterfall_zoom * 2).min(self.timeline.len().max(20));
+        self.ensure_cursor_visible();
+    }
+
+    /// Adjust `waterfall_x_scroll` so the cursor stays within the visible window.
+    pub fn ensure_cursor_visible(&mut self) {
+        if self.cursor < self.waterfall_x_scroll {
+            self.waterfall_x_scroll = self.cursor;
+        } else if self.waterfall_zoom > 0
+            && self.cursor >= self.waterfall_x_scroll + self.waterfall_zoom
+        {
+            self.waterfall_x_scroll = self.cursor + 1 - self.waterfall_zoom;
+        }
     }
 
     pub fn cycle_detail_panel(&mut self) {

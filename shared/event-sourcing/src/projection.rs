@@ -538,7 +538,7 @@ impl ClusterProjection {
                     P2P::GossipMessageReceived(_) => {
                         node.p2p.gossip_recv += 1;
                     }
-                    P2P::BlobDownloadRequested(_) => todo!(),
+                    P2P::BlobDownloadRequested(_) => if let Some(tag_id) = download_tag(event) {},
                 },
 
                 // ── ResourceSnapshot ─────────────────────────────────────────

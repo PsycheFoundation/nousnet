@@ -1,0 +1,41 @@
+   Compiling psyche-event-sourcing v0.2.0 (/home/ari/src/psyche/shared/event-sourcing)
+   Compiling observer v0.2.0 (/home/ari/src/psyche/tools/rust-tools/observer)
+warning: struct `ClusterWidget` is never constructed
+  --> tools/rust-tools/observer/widgets/cluster.rs:10:12
+   |
+10 | pub struct ClusterWidget<'a> {
+   |            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `EventScrollWidget` is never constructed
+  --> tools/rust-tools/observer/widgets/event_scroll.rs:10:12
+   |
+10 | pub struct EventScrollWidget<'a> {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: `observer` (bin "observer") generated 2 warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2.85s
+     Running `target/debug/observer ./events/local-testnet`
+[timeline] scanning events dir: ./events/local-testnet
+[timeline]   node dir 'f381626e41e7027ea431bfe3009e94bdd25a746beec468948d6c3c7c5dc9a54b': 1 postcard file(s)
+[timeline]     events-epoch-0-2026-02-20T21-39-39Z.postcard -> 986237 bytes, 0 events decoded (cursor stopped at 0)
+[timeline]   node dir '4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29': 1 postcard file(s)
+[timeline]     events-epoch-0-2026-02-20T21-39-39Z.postcard -> 1103636 bytes, 0 events decoded (cursor stopped at 0)
+[timeline]   node dir '7422b9887598068e32c4448a949adb290d0f4e35b9e01b0ee5f1a1e600fe2674': 1 postcard file(s)
+[timeline]     events-epoch-0-2026-02-20T21-39-39Z.postcard -> 1143986 bytes, 0 events decoded (cursor stopped at 0)
+[timeline]   skipping coordinator subdir
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0
+[debug] total=11503 node_entries=0 coord_entries=11503 cursor=11502 snapshot.nodes=0

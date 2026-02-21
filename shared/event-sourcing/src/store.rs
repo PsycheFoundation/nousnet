@@ -60,7 +60,8 @@ impl FileBackend {
         }
 
         let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
-        let mut state = FileWriterState::new(base_path.to_path_buf(), initial_epoch, run_context)?;
+        let mut filewriter =
+            FileWriterState::new(base_path.to_path_buf(), initial_epoch, run_context)?;
 
         tokio::runtime::Handle::try_current()
             .expect("FileBackend requires a tokio runtime")
@@ -68,12 +69,12 @@ impl FileBackend {
                 while let Some(msg) = rx.recv().await {
                     match msg.data {
                         EventData::EpochStarted(EpochStarted { epoch_number }) => {
-                            if let Err(e) = state.rotate(epoch_number) {
+                            if let Err(e) = filewriter.rotate(epoch_number) {
                                 error!("Failed to rotate file: {}", e);
                             }
                         }
                         _ => {
-                            if let Err(e) = state.write_event(&msg) {
+                            if let Err(e) = filewriter.write_event(&msg) {
                                 error!("Failed to write event to disk: {}", e);
                             }
                         }

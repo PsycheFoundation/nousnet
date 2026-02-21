@@ -71,7 +71,7 @@ impl<'a> Widget for ScrubberWidget<'a> {
 
         // ── Keybinds ───────────────────────────────────────────────────────────
         lines.push(Line::from(Span::styled(
-            "[←/→] step  [Shift+←/→] ×50  [Space] play  [↑/↓] node  [Tab] panel  [1/2/3] speed  [g/G] first/last  [q] quit",
+            "[←/→] step  [Shift+←/→] ×50  [Space] play  [↑/↓] node  [1/2/3] speed  [g/G] first/last  [q] quit",
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),
