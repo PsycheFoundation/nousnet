@@ -1,11 +1,10 @@
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use psyche_centralized_shared::{ClientId, ClientToServerMessage, ServerToClientMessage};
-use psyche_coordinator::data_selection::assign_data_for_state;
 use psyche_coordinator::model::{self, Checkpoint, LLM, LLMTrainingDataLocation, Model};
 use psyche_coordinator::{
     Client, ClientState, CommitteeSelection, Coordinator, CoordinatorError, HealthChecks, Round,
-    RunState, SOLANA_MAX_NUM_CLIENTS, TickResult,
+    RunState, SOLANA_MAX_NUM_CLIENTS, TickResult, assign_data_for_state,
 };
 use psyche_event_sourcing::events::{CoordinatorClientRecord, CoordinatorRecord};
 
@@ -536,14 +535,15 @@ impl App {
             })
             .collect();
         // Compute current-step batch assignments from coordinator state.
-        let batch_assignments = CommitteeSelection::from_coordinator(&self.coordinator, 0)
-            .map(|sel| {
-                assign_data_for_state(&self.coordinator, &sel)
-                    .into_iter()
-                    .map(|(batch_id, node_id)| (batch_id, node_id.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let batch_assignments: std::collections::BTreeMap<_, _> =
+            CommitteeSelection::from_coordinator(&self.coordinator, 0)
+                .map(|sel| {
+                    assign_data_for_state(&self.coordinator, &sel)
+                        .into_iter()
+                        .map(|(batch_id, node_id)| (batch_id, node_id.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
         CoordinatorRecord {
             timestamp: chrono::Utc::now(),
             run_state: self.coordinator.run_state,
