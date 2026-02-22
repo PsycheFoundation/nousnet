@@ -467,10 +467,23 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
 
                             let signature = network_identity.raw_p2p_sign(&private_key, &commitment_data_hash);
                             let commitment = Commitment { data_hash: commitment_data_hash, signature};
+
+                            event!(
+                                {
+                                    p2p::GossipMessageSent {
+                                        message_type: "distro_result".to_string(),
+                                    }
+                                },
+                                Tags {
+                                    batch_ids: vec![batch_id],
+                                    blob: ticket.hash()
+                                }
+                            );
                             let training_result = Broadcast { step, proof, nonce: rand::rng().random(), commitment, data: BroadcastType::TrainingResult(TrainingResult { batch_id, ticket })};
 
                             p2p.broadcast(&training_result)?;
                             broadcasts.push((training_result.clone(), step));
+
 
                             // simulate us recving it & apply like anyone else's
                             run.apply_message(identity, training_result)?;

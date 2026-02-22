@@ -83,7 +83,7 @@ enum Priority {
 
 fn categorize(data: &EventData) -> Priority {
     match data {
-        EventData::Client(Client::ErrorOccurred(_)) => Priority::Error,
+        EventData::Client(Client::Error(_) | Client::Warning(_)) => Priority::Error,
         EventData::Train(_) => Priority::Train,
         EventData::Warmup(_) => Priority::Warmup,
         EventData::Cooldown(_) => Priority::Cooldown,
@@ -300,7 +300,14 @@ impl<'a> Widget for WaterfallWidget<'a> {
 
             // Paint layer 1: fill entire track with dim dots.
             let dots: String = "-".repeat(track_w);
-            buf.set_string(area.x, y, &dots, Style::default().fg(Color::DarkGray));
+            buf.set_string(area.x, y, &dots, {
+                let s = Style::default();
+                if is_selected {
+                    s.add_modifier(Modifier::BOLD)
+                } else {
+                    s.fg(Color::DarkGray)
+                }
+            });
 
             // Paint layer 2: each event flows rightward until the next occupied slot.
             // The cursor slot is painted here too — layer 3 just stamps │ on top.

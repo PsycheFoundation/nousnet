@@ -16,21 +16,13 @@ pub enum SubscriptionStatus {
     Down,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
-pub enum ErrorKind {
-    InvalidRunState,
-    InvalidWitness,
-    Timeout,
-    Unknown,
-}
-
 /// Tags link an event to the broader operation it belongs to.
 /// Each field is `None` when the event is not part of that operation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Tags {
     pub blob_upload: Option<u64>,
     pub blob_download: Option<u64>,
-    pub batch_id: Option<BatchId>,
+    pub batch_ids: Option<Vec<BatchId>>,
     pub blob: Option<BlobHash>,
     pub checkpoint_download: Option<u64>,
     pub coordinator_call: Option<u64>,
@@ -124,10 +116,15 @@ pub enum Client {
         epoch: u64,
         step: u64,
     },
+
     #[display("health check failed index={index} step={current_step}")]
     HealthCheckFailed { index: u64, current_step: u64 },
-    #[display("error ({kind}): {message}")]
-    ErrorOccurred { kind: ErrorKind, message: String },
+
+    #[display("{message}")]
+    Error { message: String },
+
+    #[display("{message}")]
+    Warning { message: String },
 }
 
 #[first_class_variants(
@@ -180,17 +177,10 @@ pub enum P2P {
         success: bool,
         error_string: Option<String>,
     },
-    #[display("gossip sent: {message_type} {message_size_bytes}B")]
-    GossipMessageSent {
-        message_type: String,
-        message_size_bytes: u64,
-        rebroadcast_count: u32,
-    },
-    #[display("gossip received: {message_type} {message_size_bytes}B")]
-    GossipMessageReceived {
-        message_type: String,
-        message_size_bytes: u64,
-    },
+    #[display("gossip sent: {message_type}")]
+    GossipMessageSent { message_type: String },
+    #[display("gossip received: {message_type}")]
+    GossipMessageReceived { message_type: String },
 }
 
 #[first_class_variants(
@@ -202,24 +192,15 @@ pub enum P2P {
 pub enum Train {
     #[display("batches assigned: {num_batches}")]
     BatchesAssigned { num_batches: u32 },
-    #[display("batch data download start: {size_bytes}B")]
-    BatchDataDownloadStart { size_bytes: u64 },
-    #[display("batch data download progress: {bytes_downloaded}B")]
-    BatchDataDownloadProgress { bytes_downloaded: u64 },
-    #[display("batch data download complete: success={success}")]
-    BatchDataDownloadComplete {
-        success: bool,
-        error_string: Option<String>,
-    },
+    #[display("batch data download start")]
+    BatchDataDownloadStart,
+    #[display("batch data download finished: success={}", result.is_ok())]
+    BatchDataDownloadComplete { result: Result<(), ()> },
 
     #[display("training started")]
     TrainingStarted,
-    #[display("training finished: epoch={epoch} step={step} loss={loss:?}")]
-    TrainingFinished {
-        epoch: u64,
-        step: u64,
-        loss: Option<f64>,
-    },
+    #[display("training finished: step={step} loss={loss:?}")]
+    TrainingFinished { step: u64, loss: Option<f64> },
     #[display("untrained batch warning")]
     UntrainedBatchWarning {
         batch_id: BatchId,
@@ -338,6 +319,8 @@ pub struct CoordinatorRecord {
     pub min_clients: u16,
     /// Active clients at the time of this snapshot.
     pub clients: Vec<CoordinatorClientRecord>,
+    /// Batch → assigned node-id string for the current step.
+    pub batch_assignments: std::collections::BTreeMap<BatchId, String>,
 }
 
 /// A single active client entry within a [`CoordinatorRecord`].

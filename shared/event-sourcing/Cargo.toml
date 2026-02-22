@@ -20,6 +20,7 @@ derive_more = { version = "2.1.1", features = ["from", "display"] }
 first-class-variants = "1.1.0"
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false }
 indexmap.workspace = true
 psyche-metrics.workspace = true
 

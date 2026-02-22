@@ -323,23 +323,22 @@ mod tests {
             Box::new(FileBackend::new(temp_dir.path(), 0, test_run_context()).unwrap()),
         ]);
 
-        use psyche_core::ClosedInterval;
+        use psyche_core::{BatchId, ClosedInterval};
 
         event!(
             train::TrainingStarted,
             Tags {
-                batch_id: psyche_core::BatchId(ClosedInterval::new(1, 1))
+                batch_ids: vec![BatchId(ClosedInterval::new(1, 1))]
             }
         );
 
         event!(
             train::TrainingFinished {
-                epoch: 0,
                 step: 1,
                 loss: Some(0.5),
             },
             Tags {
-                batch_id: psyche_core::BatchId(ClosedInterval::new(1, 1))
+                batch_ids: vec![BatchId(ClosedInterval::new(1, 1))]
             }
         );
 
@@ -370,7 +369,6 @@ mod tests {
         event!(EpochStarted { epoch_number: 1 });
 
         event!(train::TrainingFinished {
-            epoch: 1,
             step: 10,
             loss: None,
         });
@@ -401,23 +399,22 @@ mod tests {
             FileBackend::new(temp_dir.path(), 0, test_run_context()).unwrap(),
         )]);
 
-        use psyche_core::ClosedInterval;
+        use psyche_core::{BatchId, ClosedInterval};
 
         event!(
             train::TrainingStarted,
             Tags {
-                batch_id: psyche_core::BatchId(ClosedInterval::new(42, 42))
+                batch_ids: vec![BatchId(ClosedInterval::new(42, 42))]
             }
         );
 
         event!(
             train::TrainingFinished {
-                epoch: 0,
                 step: 42,
                 loss: Some(0.123),
             },
             Tags {
-                batch_id: psyche_core::BatchId(ClosedInterval::new(42, 42))
+                batch_ids: vec![BatchId(ClosedInterval::new(42, 42))]
             }
         );
 

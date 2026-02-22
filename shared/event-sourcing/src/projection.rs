@@ -6,9 +6,7 @@ use psyche_core::BatchId;
 use psyche_metrics::SelectedPath;
 use std::collections::{BTreeMap, HashSet};
 
-use crate::events::{
-    Client, Cooldown, ErrorKind, Event, EventData, P2P, ResourceSnapshot, Train, Warmup,
-};
+use crate::events::{Client, Cooldown, Event, EventData, P2P, ResourceSnapshot, Train, Warmup};
 
 // ── Tag helpers ───────────────────────────────────────────────────────────────
 
@@ -20,8 +18,8 @@ fn download_tag(event: &Event) -> Option<u64> {
     event.tags.blob_download
 }
 
-fn batch_id_tag(event: &Event) -> Option<BatchId> {
-    event.tags.batch_id
+fn batch_id_tags(event: &Event) -> impl Iterator<Item = &BatchId> {
+    event.tags.batch_ids.iter().flatten()
 }
 
 // ── Coordinator ───────────────────────────────────────────────────────────────
@@ -113,9 +111,7 @@ pub struct P2PSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct BatchDownload {
-    pub size_bytes: Option<u64>,
-    pub bytes_downloaded: u64,
-    pub result: Option<Result<(), String>>,
+    pub result: Option<Result<(), ()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,10 +176,10 @@ pub struct NodeSnapshot {
     pub epoch: u64,
     pub step: u64,
     pub warmup: WarmupSnapshot,
-    /// (epoch, step, loss) — one entry per TrainingFinished with a loss value.
-    pub epoch_losses: Vec<(u64, u64, f64)>,
+    /// (step, loss) — one entry per TrainingFinished with a loss value.
+    pub losses: Vec<(u64, f64)>,
     pub health_check_steps: Vec<u64>,
-    pub last_error: Option<(ErrorKind, String)>,
+    pub last_error: Option<String>,
     /// Instantaneous TX throughput in bytes/sec (derived from consecutive ResourceSnapshots).
     pub network_tx_bps: Option<f64>,
     /// Instantaneous RX throughput in bytes/sec.
@@ -203,7 +199,7 @@ impl NodeSnapshot {
             epoch: 0,
             step: 0,
             warmup: WarmupSnapshot::default(),
-            epoch_losses: Vec::new(),
+            losses: Vec::new(),
             health_check_steps: Vec::new(),
             last_error: None,
             network_tx_bps: None,
@@ -302,9 +298,10 @@ impl ClusterProjection {
                     Client::HealthCheckFailed(hcf) => {
                         node.health_check_steps.push(hcf.current_step);
                     }
-                    Client::ErrorOccurred(e) => {
-                        node.last_error = Some((e.kind, e.message.clone()));
+                    Client::Error(e) => {
+                        node.last_error = Some(e.message.clone());
                     }
+                    Client::Warning(_) => {}
                 },
 
                 // ── Train ────────────────────────────────────────────────────
@@ -315,49 +312,28 @@ impl ClusterProjection {
                         node.train.training_in_progress = false;
                         node.train.witness = None;
                     }
-                    Train::BatchDataDownloadStart(s) => {
-                        if let Some(batch_id) = batch_id_tag(event) {
-                            node.train.batch_downloads.insert(
-                                batch_id,
-                                BatchDownload {
-                                    size_bytes: Some(s.size_bytes),
-                                    bytes_downloaded: 0,
-                                    result: None,
-                                },
-                            );
-                        }
-                    }
-                    Train::BatchDataDownloadProgress(p) => {
-                        if let Some(batch_id) = batch_id_tag(event) {
-                            if let Some(dl) = node.train.batch_downloads.get_mut(&batch_id) {
-                                dl.bytes_downloaded = p.bytes_downloaded;
-                            }
+                    Train::BatchDataDownloadStart(_) => {
+                        for batch_id in batch_id_tags(event) {
+                            node.train
+                                .batch_downloads
+                                .insert(*batch_id, BatchDownload { result: None });
                         }
                     }
                     Train::BatchDataDownloadComplete(c) => {
-                        if let Some(batch_id) = batch_id_tag(event) {
-                            if let Some(dl) = node.train.batch_downloads.get_mut(&batch_id) {
-                                dl.result = Some(if c.success {
-                                    Ok(())
-                                } else {
-                                    Err(c.error_string.clone().unwrap_or_default())
-                                });
+                        for batch_id in batch_id_tags(event) {
+                            if let Some(dl) = node.train.batch_downloads.get_mut(batch_id) {
+                                dl.result = Some(c.result);
                             }
                         }
                     }
                     Train::TrainingStarted(_) => {
                         node.train.training_in_progress = true;
                     }
-                    Train::TrainingFinished(crate::train::TrainingFinished {
-                        epoch,
-                        step,
-                        loss,
-                    }) => {
+                    Train::TrainingFinished(crate::train::TrainingFinished { step, loss }) => {
                         node.train.training_in_progress = false;
                         if let Some(loss) = *loss {
-                            node.epoch_losses.push((*epoch, *step, loss));
+                            node.losses.push((*step, loss));
                         }
-                        node.epoch = *epoch;
                         node.step = *step;
                     }
                     Train::WitnessElected(we) => {
@@ -538,7 +514,7 @@ impl ClusterProjection {
                     P2P::GossipMessageReceived(_) => {
                         node.p2p.gossip_recv += 1;
                     }
-                    P2P::BlobDownloadRequested(_) => if let Some(tag_id) = download_tag(event) {},
+                    P2P::BlobDownloadRequested(_) => {}
                 },
 
                 // ── ResourceSnapshot ─────────────────────────────────────────
@@ -567,65 +543,36 @@ impl ClusterProjection {
                 _ => {}
             }
         }
-        // ── node borrow released ──────────────────────────────────────────────
 
         // ── Phase 2: cluster-level step_batches updates ───────────────────────
-        // Helper: returns true if the batch_id belongs to the previous step's map
-        // (i.e. it's not in the current step but IS in the previous step).
-        let in_prev = |batch_id: &BatchId| {
-            !self.snapshot.step_batches.contains_key(batch_id)
-                && self.snapshot.prev_step_batches.contains_key(batch_id)
-        };
 
         match &event.data {
-            EventData::Train(Train::BatchDataDownloadStart(s)) => {
-                if let Some(batch_id) = batch_id_tag(event) {
-                    let use_prev = in_prev(&batch_id);
+            EventData::Train(Train::BatchDataDownloadStart(_)) => {
+                for batch_id in batch_id_tags(event) {
+                    let use_prev = self.in_prev(*batch_id);
                     let view = if use_prev {
-                        self.snapshot.prev_step_batches.entry(batch_id).or_default()
+                        self.snapshot
+                            .prev_step_batches
+                            .entry(*batch_id)
+                            .or_default()
                     } else {
-                        self.snapshot.step_batches.entry(batch_id).or_default()
+                        self.snapshot.step_batches.entry(*batch_id).or_default()
                     };
-                    view.downloads.insert(
-                        node_id.to_string(),
-                        BatchDownload {
-                            size_bytes: Some(s.size_bytes),
-                            bytes_downloaded: 0,
-                            result: None,
-                        },
-                    );
-                }
-            }
-            EventData::Train(Train::BatchDataDownloadProgress(p)) => {
-                if let Some(batch_id) = batch_id_tag(event) {
-                    let use_prev = in_prev(&batch_id);
-                    let map = if use_prev {
-                        &mut self.snapshot.prev_step_batches
-                    } else {
-                        &mut self.snapshot.step_batches
-                    };
-                    if let Some(view) = map.get_mut(&batch_id) {
-                        if let Some(dl) = view.downloads.get_mut(node_id) {
-                            dl.bytes_downloaded = p.bytes_downloaded;
-                        }
-                    }
+                    view.downloads
+                        .insert(node_id.to_string(), BatchDownload { result: None });
                 }
             }
             EventData::Train(Train::BatchDataDownloadComplete(c)) => {
-                if let Some(batch_id) = batch_id_tag(event) {
-                    let use_prev = in_prev(&batch_id);
+                for batch_id in batch_id_tags(event) {
+                    let use_prev = self.in_prev(*batch_id);
                     let map = if use_prev {
                         &mut self.snapshot.prev_step_batches
                     } else {
                         &mut self.snapshot.step_batches
                     };
-                    if let Some(view) = map.get_mut(&batch_id) {
+                    if let Some(view) = map.get_mut(batch_id) {
                         if let Some(dl) = view.downloads.get_mut(node_id) {
-                            dl.result = Some(if c.success {
-                                Ok(())
-                            } else {
-                                Err(c.error_string.clone().unwrap_or_default())
-                            });
+                            dl.result = Some(c.result);
                         }
                     }
                 }
@@ -688,6 +635,13 @@ impl ClusterProjection {
 
     pub fn snapshot(&self) -> &ClusterSnapshot {
         &self.snapshot
+    }
+
+    // Returns true if the batch_id belongs to the previous step's map
+    // (i.e. it's not in the current step but IS in the previous step).
+    fn in_prev(&self, batch_id: BatchId) -> bool {
+        !self.snapshot.step_batches.contains_key(&batch_id)
+            && self.snapshot.prev_step_batches.contains_key(&batch_id)
     }
 }
 
@@ -823,7 +777,6 @@ mod tests {
             node_id,
             &make_event(EventData::Train(crate::events::Train::TrainingFinished(
                 train::TrainingFinished {
-                    epoch: 1,
                     step: 5,
                     loss: Some(2.5),
                 },
@@ -831,8 +784,7 @@ mod tests {
         );
 
         let node = &proj.snapshot().nodes[node_id];
-        assert_eq!(node.epoch_losses, vec![(1, 5, 2.5)]);
-        assert_eq!(node.epoch, 1);
+        assert_eq!(node.losses, vec![(5, 2.5)]);
         assert_eq!(node.step, 5);
     }
 
@@ -879,10 +831,10 @@ mod tests {
             node_id,
             &make_event_with_tags(
                 EventData::Train(crate::events::Train::BatchDataDownloadStart(
-                    train::BatchDataDownloadStart { size_bytes: 4096 },
+                    train::BatchDataDownloadStart,
                 )),
                 Tags {
-                    batch_id: Some(batch_id),
+                    batch_ids: Some(vec![batch_id]),
                     ..Default::default()
                 },
             ),
@@ -890,14 +842,9 @@ mod tests {
 
         let node = &proj.snapshot().nodes[node_id];
         assert!(node.train.batch_downloads.contains_key(&batch_id));
-        assert_eq!(node.train.batch_downloads[&batch_id].size_bytes, Some(4096));
 
         // Also mirrored into cluster step_batches
         assert!(proj.snapshot().step_batches.contains_key(&batch_id));
-        assert_eq!(
-            proj.snapshot().step_batches[&batch_id].downloads[node_id].size_bytes,
-            Some(4096)
-        );
     }
 
     #[test]

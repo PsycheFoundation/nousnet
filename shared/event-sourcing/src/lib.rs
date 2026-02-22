@@ -3,9 +3,11 @@ pub mod events;
 pub mod projection;
 pub mod store;
 pub mod timeline;
+pub mod tracing_layer;
 
 pub use events::*;
 pub use store::{Backend, EventStore, FileBackend, InMemoryBackend};
+pub use tracing_layer::EventStoreTracingLayer;
 
 pub use chrono::Utc;
 

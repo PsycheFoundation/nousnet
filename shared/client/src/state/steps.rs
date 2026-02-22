@@ -796,11 +796,12 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> StepStateMachine<T, 
                     .lock()
                     .map_err(|_| StepError::StatsLoggerMutex)?
                     .push_round_stats(&round_losses, round_duration, step_duration, optim_stats);
+
                 event!(train::TrainingFinished {
-                    epoch: state.progress.epoch as u64,
                     step: state.progress.step as u64,
                     loss: loss.map(|l| l as f64),
                 });
+
                 info!(
                     client_id = %self.identity,
                     epoch = state.progress.epoch,

@@ -23,7 +23,7 @@ fn coordinator_record_to_snapshot(rec: CoordinatorRecord) -> CoordinatorStateSna
         checkpoint: rec.checkpoint,
         client_ids: rec.clients.iter().map(|c| c.id.clone()).collect(),
         min_clients: rec.min_clients as usize,
-        batch_assignments: BTreeMap::new(),
+        batch_assignments: rec.batch_assignments,
     }
 }
 

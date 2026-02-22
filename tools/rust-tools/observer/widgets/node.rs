@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph, Widget},
+    widgets::{Gauge, Paragraph, Widget},
 };
 
 use crate::app::NodeFileStats;
@@ -139,14 +139,14 @@ impl<'a> Widget for NodeWidget<'a> {
         ]));
 
         // Last error
-        if let Some((kind, msg)) = &node.last_error {
+        if let Some(msg) = &node.last_error {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled(
                     "Last error: ",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!("{:?}: {}", kind, msg)),
+                Span::raw(msg),
             ]));
         }
 

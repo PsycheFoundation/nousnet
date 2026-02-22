@@ -38,48 +38,26 @@ fn fmt_range(batch_id: &BatchId) -> String {
     }
 }
 
-/// Returns (pct_complete, result) for the most-progressed download among all nodes.
+/// Returns the download result for the assigned node (or any node as fallback).
 fn best_download(
     batch: &ClusterBatchView,
     assigned: Option<&str>,
-) -> Option<(f64, Option<Result<(), String>>)> {
+) -> Option<Option<Result<(), ()>>> {
     // Prefer the assigned node's download; fall back to any node.
     let dl: Option<&BatchDownload> = assigned
         .and_then(|id| batch.downloads.get(id))
         .or_else(|| batch.downloads.values().next());
 
-    let dl = dl?;
-    let pct = match dl.size_bytes {
-        Some(sz) if sz > 0 => dl.bytes_downloaded as f64 / sz as f64,
-        _ => {
-            if dl.result.is_some() {
-                1.0
-            } else {
-                0.0
-            }
-        }
-    };
-    Some((pct, dl.result.clone()))
+    Some(dl?.result)
 }
 
 fn download_cell(batch: &ClusterBatchView) -> (String, Color) {
     let assigned = batch.assigned_to.as_deref();
     match best_download(batch, assigned) {
         None => ("  —".to_string(), Color::DarkGray),
-        Some((_, Some(Ok(())))) => ("  ✓".to_string(), Color::Green),
-        Some((_, Some(Err(e)))) => {
-            let msg = if e.is_empty() {
-                "err".to_string()
-            } else {
-                e[..e.len().min(8)].to_string()
-            };
-            (format!("  ✗ {msg}"), Color::Red)
-        }
-        Some((pct, None)) => {
-            let filled = (pct * 8.0).round() as usize;
-            let bar: String = "█".repeat(filled) + &"░".repeat(8usize.saturating_sub(filled));
-            (format!(" {bar} {:3.0}%", pct * 100.0), Color::Yellow)
-        }
+        Some(Some(Ok(()))) => ("  ✓".to_string(), Color::Green),
+        Some(Some(Err(()))) => ("  ✗".to_string(), Color::Red),
+        Some(None) => ("  ⋯".to_string(), Color::Yellow),
     }
 }
 

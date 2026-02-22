@@ -46,7 +46,7 @@ impl<'a> Widget for LossGraphWidget<'a> {
         let node_data: Vec<Node> = self
             .nodes
             .iter()
-            .filter(|(_, n)| !n.epoch_losses.is_empty())
+            .filter(|(_, n)| !n.losses.is_empty())
             .enumerate()
             .map(|(color_idx, (id, n))| {
                 let short_id = if id.len() > 14 {
@@ -56,25 +56,13 @@ impl<'a> Widget for LossGraphWidget<'a> {
                 };
 
                 let pts: Vec<(f64, f64)> = n
-                    .epoch_losses
+                    .losses
                     .iter()
-                    .map(|&(_, step, loss)| (step as f64, loss))
+                    .map(|&(step, loss)| (step as f64, loss))
                     .collect();
 
-                // Epoch boundary: midpoint between last step of epoch N and first of epoch N+1.
-                let boundaries: Vec<(f64, u64)> = n
-                    .epoch_losses
-                    .windows(2)
-                    .filter_map(|w| {
-                        let (e0, s0, _) = w[0];
-                        let (e1, s1, _) = w[1];
-                        if e0 != e1 {
-                            Some(((s0 as f64 + s1 as f64) / 2.0, e1))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                // Epoch info is no longer stored per loss entry; no boundaries to draw.
+                let boundaries: Vec<(f64, u64)> = Vec::new();
 
                 Node {
                     boundaries,
