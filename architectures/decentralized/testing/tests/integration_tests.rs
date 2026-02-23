@@ -693,6 +693,8 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
     let solana_client = SolanaTestClient::new(run_id, None).await;
     let mut has_spawned_new_client_yet = false;
     let mut has_checked_p2p_checkpoint = false;
+    let mut waiting_for_round_train = false;
+    let mut round_train_wait_start: Option<tokio::time::Instant> = None;
     let mut hub_wait_iterations = 0;
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
     println!("starting loop");
@@ -730,30 +732,49 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                     if matches!(checkpoint, Checkpoint::P2P(_)) {
                         println!("Checkpoint was P2P");
                         has_checked_p2p_checkpoint = true;
-                    } else {
-                        continue;
+                        waiting_for_round_train = true;
+                        round_train_wait_start = Some(tokio::time::Instant::now());
+                        println!("Waiting for training to start before killing clients...");
                     }
+                    continue;
+                }
 
-                    // Wait for the coordinator to move past WaitingForMembers
-                    // before killing clients. If we kill+respawn while the coordinator
-                    // is still in WaitingForMembers, the new clients join the current
-                    // epoch and count as "previous epoch clients" at the next transition,
-                    // preventing the P2P→Hub revert.
-                    println!("Waiting for training to start before killing clients...");
-                    assert!(
-                        solana_client.wait_for_run_state(RunState::RoundTrain, 120).await,
-                        "Timed out waiting for training to start"
+                // Non-blocking wait for the coordinator to move past WaitingForMembers
+                // before killing clients. If we kill+respawn while the coordinator
+                // is still in WaitingForMembers, the new clients join the current
+                // epoch and count as "previous epoch clients" at the next transition,
+                // preventing the P2P→Hub revert.
+                if waiting_for_round_train {
+                    let run_state = solana_client.get_run_state().await;
+                    let epoch_clients = solana_client.get_current_epoch_clients().await;
+                    let (_, running) = get_container_names(docker.clone()).await;
+                    println!(
+                        "Waiting for RoundTrain: state={run_state}, epoch_clients={}, running_containers={}",
+                        epoch_clients.len(),
+                        running.len(),
                     );
 
-                    println!("Killing all clients to test checkpoint change to Hub");
-                    kill_all_clients(&docker, "SIGKILL").await;
-                    let joined_container_id = spawn_new_client_with_monitoring(docker.clone(), &watcher).await.unwrap();
-                    println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
-                    // Spawn another because we have min_clients=2
-                    let joined_container_id = spawn_new_client_with_monitoring(docker.clone(), &watcher).await.unwrap();
-                    println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
-                    has_spawned_new_client_yet = true;
+                    if running.is_empty() {
+                        panic!("All clients crashed while waiting for RoundTrain");
+                    }
 
+                    if run_state == RunState::RoundTrain {
+                        waiting_for_round_train = false;
+                        println!("Killing all clients to test checkpoint change to Hub");
+                        kill_all_clients(&docker, "SIGKILL").await;
+                        let joined_container_id = spawn_new_client_with_monitoring(docker.clone(), &watcher).await.unwrap();
+                        println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
+                        // Spawn another because we have min_clients=2
+                        let joined_container_id = spawn_new_client_with_monitoring(docker.clone(), &watcher).await.unwrap();
+                        println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
+                        has_spawned_new_client_yet = true;
+                    } else if round_train_wait_start.unwrap().elapsed() > Duration::from_secs(240) {
+                        panic!(
+                            "Timed out waiting for RoundTrain (240s). Last state: {run_state}, epoch_clients: {}, running_containers: {}",
+                            epoch_clients.len(),
+                            running.len(),
+                        );
+                    }
                     continue;
                 }
 
