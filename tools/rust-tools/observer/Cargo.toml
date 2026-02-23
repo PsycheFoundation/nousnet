@@ -11,8 +11,3 @@ ratatui.workspace = true
 crossterm = { version = "0.28.1", features = ["event-stream"] }
 clap = { workspace = true }
 indexmap.workspace = true
-
-
-[[bin]]
-name = "observer"
-path = "main.rs"
