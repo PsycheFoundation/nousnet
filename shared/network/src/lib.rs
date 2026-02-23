@@ -1,16 +1,16 @@
 use allowlist::Allowlist;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use download::{DownloadManager, DownloadManagerEvent, DownloadUpdate};
 use futures_util::{StreamExt, TryFutureExt};
-use iroh::{EndpointAddr, RelayConfig};
 use iroh::{endpoint::QuicTransportConfig, protocol::Router};
+use iroh::{EndpointAddr, RelayConfig};
 use iroh_blobs::api::Tag;
 use iroh_blobs::store::GcConfig;
 use iroh_blobs::{
-    BlobsProtocol,
     api::downloader::Downloader,
     store::mem::{MemStore, Options as MemStoreOptions},
+    BlobsProtocol,
 };
 use iroh_gossip::{
     api::{GossipReceiver, GossipSender},
@@ -19,11 +19,11 @@ use iroh_gossip::{
 };
 use iroh_n0des::ApiSecret;
 pub use p2p_model_sharing::{
-    MODEL_REQUEST_TIMEOUT_SECS, ModelConfigSharingMessage, ParameterSharingMessage,
-    PeerManagerHandle,
+    ModelConfigSharingMessage, ParameterSharingMessage, PeerManagerHandle,
+    MODEL_REQUEST_TIMEOUT_SECS,
 };
 use psyche_metrics::{ClientMetrics, PeerConnection};
-use router::{SupportedProtocols, spawn_router_with_allowlist};
+use router::{spawn_router, SupportedProtocols};
 use state::State;
 use std::str::FromStr;
 use std::{
@@ -43,15 +43,15 @@ use tokio::{
 };
 use tokio::{
     sync::mpsc,
-    time::{Interval, interval},
+    time::{interval, Interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, debug_span, error, info, trace, warn};
+use tracing::{debug, debug_span, error, info, trace, warn, Instrument};
 use util::{fmt_relay_mode, gossip_topic};
 
 pub use ed25519_dalek::Signature;
 pub use iroh::RelayMode;
-pub use iroh_blobs::{BlobFormat, Hash, ticket::BlobTicket};
+pub use iroh_blobs::{ticket::BlobTicket, BlobFormat, Hash};
 
 pub mod allowlist;
 mod authenticable_identity;
@@ -74,7 +74,7 @@ mod util;
 #[cfg(test)]
 mod test;
 
-pub use authenticable_identity::{AuthenticatableIdentity, FromSignedBytesError, raw_p2p_verify};
+pub use authenticable_identity::{raw_p2p_verify, AuthenticatableIdentity, FromSignedBytesError};
 pub use connection_monitor::{ConnectionData, ConnectionMonitor};
 pub use download::{
     DownloadComplete, DownloadFailed, DownloadSchedulerHandle, DownloadType, ReadyRetry,
@@ -85,12 +85,12 @@ pub use iroh::{Endpoint, EndpointId, PublicKey, SecretKey};
 use iroh_relay::{RelayMap, RelayQuicConfig};
 pub use latency_sorted::LatencySorted;
 pub use p2p_model_sharing::{
-    ALPN, ModelRequestType, SharableModel, SharableModelError, TransmittableModelConfig,
+    ModelRequestType, SharableModel, SharableModelError, TransmittableModelConfig, ALPN,
 };
 pub use serde::Networkable;
 pub use serialized_distro::{
-    SerializeDistroResultError, SerializedDistroResult, TransmittableDistroResult,
-    distro_results_from_reader, distro_results_to_bytes,
+    distro_results_from_reader, distro_results_to_bytes, SerializeDistroResultError,
+    SerializedDistroResult, TransmittableDistroResult,
 };
 pub use signed_message::SignedMessage;
 pub use tcp::{ClientNotification, TcpClient, TcpServer};
@@ -98,6 +98,7 @@ pub use tui::{NetworkTUIState, NetworkTui};
 use url::Url;
 pub use util::fmt_bytes;
 
+use crate::allowlist::AllowlistHook;
 use crate::p2p_model_sharing::ModelSharing;
 
 const USE_RELAY_HOSTNAME: &str = "use1-1.relay.nousresearch.psyche.iroh.link";
@@ -335,6 +336,8 @@ where
 
         let connection_monitor = ConnectionMonitor::default();
 
+        let allowlist_hook = AllowlistHook::new(allowlist.clone());
+
         let endpoint = {
             let transport_config = QuicTransportConfig::builder()
                 .max_idle_timeout(Some(Duration::from_secs(10).try_into()?))
@@ -355,6 +358,7 @@ where
                 .transport_config(transport_config)
                 .bind_addr(SocketAddrV4::new(ipv4, port.unwrap_or(0)))?
                 .clear_address_lookup()
+                .hooks(allowlist_hook.clone())
                 .hooks(connection_monitor.clone());
 
             let endpoint = match discovery_mode {
@@ -462,8 +466,7 @@ where
 
         trace!("creating router...");
         let blobs_protocol = BlobsProtocol::new(&store.clone(), None);
-        let router = spawn_router_with_allowlist(
-            allowlist.clone(),
+        let router = spawn_router(
             endpoint.clone(),
             SupportedProtocols::new(gossip.clone(), blobs_protocol, model_parameter_sharing),
             additional_protocol,
