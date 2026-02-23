@@ -8,14 +8,3 @@ pub fn fmt_bytes(b: u64) -> String {
         format!("{} B", b)
     }
 }
-
-/// Format a bytes-per-second rate as a human-readable string.
-pub fn fmt_bps(bps: f64) -> String {
-    if bps >= 1_000_000.0 {
-        format!("{:.1} MB/s", bps / 1_000_000.0)
-    } else if bps >= 1_000.0 {
-        format!("{:.1} KB/s", bps / 1_000.0)
-    } else {
-        format!("{:.0} B/s", bps)
-    }
-}

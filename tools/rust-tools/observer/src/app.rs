@@ -13,7 +13,7 @@ pub struct NodeFileStats {
     /// Total bytes of all .postcard files on disk for this node.
     pub total_bytes: u64,
     /// Lifetime average write rate: total_bytes / elapsed_since_first_seen.
-    pub bytes_per_sec: f64,
+    pub bytes_per_sec: u64,
 }
 
 /// Which panel/box currently has keyboard focus.
@@ -303,11 +303,11 @@ impl App {
         self.node_file_stats.clear();
         for (node_id, &total_bytes) in &current_sizes {
             let first_seen = *self.node_first_seen.entry(node_id.clone()).or_insert(now);
-            let elapsed = now.duration_since(first_seen).as_secs_f64();
-            let bytes_per_sec = if elapsed > 1.0 {
-                total_bytes as f64 / elapsed
+            let elapsed = now.duration_since(first_seen).as_secs();
+            let bytes_per_sec = if elapsed > 1 {
+                total_bytes / elapsed
             } else {
-                0.0
+                0
             };
             self.node_file_stats.insert(
                 node_id.clone(),

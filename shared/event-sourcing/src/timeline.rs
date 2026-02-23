@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
-use std::collections::BTreeMap;
-
 use crate::events::{CoordinatorRecord, Event};
 use crate::projection::{ClusterProjection, ClusterSnapshot, CoordinatorStateSnapshot};
 use crate::store::try_decode_cobs_frame;

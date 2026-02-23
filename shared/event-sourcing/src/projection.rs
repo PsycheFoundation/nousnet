@@ -181,9 +181,9 @@ pub struct NodeSnapshot {
     pub health_check_steps: Vec<u64>,
     pub last_error: Option<String>,
     /// Instantaneous TX throughput in bytes/sec (derived from consecutive ResourceSnapshots).
-    pub network_tx_bps: Option<f64>,
+    pub network_tx_bps: Option<u64>,
     /// Instantaneous RX throughput in bytes/sec.
-    pub network_rx_bps: Option<f64>,
+    pub network_rx_bps: Option<u64>,
     pub p2p: P2PSnapshot,
     pub train: TrainSnapshot,
     pub cooldown: CooldownSnapshot,
@@ -520,19 +520,16 @@ impl ClusterProjection {
                 // ── ResourceSnapshot ─────────────────────────────────────────
                 EventData::ResourceSnapshot(rs) => {
                     if let Some((prev_ts, ref prev_rs)) = node.last_resource {
-                        let dt_secs =
-                            (event.timestamp - prev_ts).num_milliseconds() as f64 / 1000.0;
-                        if dt_secs > 0.0 {
+                        let dt_secs = (event.timestamp - prev_ts).num_milliseconds() as u64 / 1000;
+                        if dt_secs > 0 {
                             node.network_tx_bps = Some(
                                 rs.network_bytes_sent_total
                                     .saturating_sub(prev_rs.network_bytes_sent_total)
-                                    as f64
                                     / dt_secs,
                             );
                             node.network_rx_bps = Some(
                                 rs.network_bytes_recv_total
                                     .saturating_sub(prev_rs.network_bytes_recv_total)
-                                    as f64
                                     / dt_secs,
                             );
                         }

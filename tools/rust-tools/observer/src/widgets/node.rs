@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::app::NodeFileStats;
-use crate::utils::{fmt_bps, fmt_bytes};
+use crate::utils::fmt_bytes;
 
 pub struct NodeWidget<'a> {
     pub snapshot: &'a ClusterSnapshot,
@@ -103,12 +103,12 @@ impl<'a> Widget for NodeWidget<'a> {
             lines.push(Line::from(vec![
                 Span::styled("Network: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
-                    format!("↑ {}", fmt_bps(node.network_tx_bps.unwrap_or(0.0))),
+                    format!("↑ {}/s", fmt_bytes(node.network_tx_bps.unwrap_or(0))),
                     Style::default().fg(Color::Green),
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    format!("↓ {}", fmt_bps(node.network_rx_bps.unwrap_or(0.0))),
+                    format!("↓ {}/s", fmt_bytes(node.network_rx_bps.unwrap_or(0))),
                     Style::default().fg(Color::Cyan),
                 ),
             ]));
@@ -122,7 +122,7 @@ impl<'a> Widget for NodeWidget<'a> {
                 Span::raw(fmt_bytes(stats.total_bytes)),
                 Span::raw("  "),
                 Span::styled(
-                    fmt_bps(stats.bytes_per_sec),
+                    format!("{}/s", fmt_bytes(stats.bytes_per_sec)),
                     Style::default().fg(Color::Yellow),
                 ),
             ]));
