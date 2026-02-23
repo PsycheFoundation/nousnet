@@ -625,7 +625,7 @@ async fn drop_a_client_waitingformembers_then_reconnect() {
                 // Once warmup starts, kill client 2's container
                 if new_state == RunState::RoundTrain.to_string() && !train_reached {
                     println!(
-                        "Train started, killing container {}...",
+                        "REMOVE ME Train started, killing container {}...",
                         &format!("{CLIENT_CONTAINER_PREFIX}-2")
                     );
 
