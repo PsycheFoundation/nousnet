@@ -66,6 +66,8 @@ async fn test_one_clients_three_epochs_run() {
     // Initialize solana client to query the coordinator state
     let solana_client = SolanaTestClient::new(run_id, None).await;
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
+    let mut last_event_time = tokio::time::Instant::now();
+    let timeout_duration = Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS);
 
     loop {
         tokio::select! {
@@ -73,32 +75,25 @@ async fn test_one_clients_three_epochs_run() {
                 if let Err(e) = watcher.monitor_clients_health(1).await {
                     panic!("{}", e);
                 }
+                if last_event_time.elapsed() > timeout_duration {
+                    let state = solana_client.get_run_state().await;
+                    let epoch = solana_client.get_current_epoch().await;
+                    let step = solana_client.get_last_step().await;
+                    let name = format!("{CLIENT_CONTAINER_PREFIX}-1");
+                    let logs = watcher.fetch_container_logs(&name, 200).await;
+                    eprintln!("\n========== Last 200 lines from {name} ==========");
+                    eprintln!("{logs}");
+                    eprintln!("========== End of logs ==========\n");
+                    panic!(
+                        "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+                    );
+                }
             }
-            response = async {
-                time::timeout(
-                    Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
-                    watcher.log_rx.recv(),
-                ).await
-            } => {
-                let response = match response {
-                    Ok(Some(response)) => response,
-                    Ok(None) => {
-                        println!("Log channel closed");
-                        break;
-                    }
-                    Err(_) => {
-                        let state = solana_client.get_run_state().await;
-                        let epoch = solana_client.get_current_epoch().await;
-                        let step = solana_client.get_last_step().await;
-                        let name = format!("{CLIENT_CONTAINER_PREFIX}-1");
-                        let logs = watcher.fetch_container_logs(&name, 200).await;
-                        eprintln!("\n========== Last 200 lines from {name} ==========");
-                        eprintln!("{logs}");
-                        eprintln!("========== End of logs ==========\n");
-                        panic!(
-                            "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
-                        );
-                    }
+            response = watcher.log_rx.recv() => {
+                last_event_time = tokio::time::Instant::now();
+                let Some(response) = response else {
+                    println!("Log channel closed");
+                    break;
                 };
 
                 match response {
@@ -178,6 +173,8 @@ async fn test_two_clients_three_epochs_run() {
     // Initialize solana client to query the coordinator state
     let solana_client = SolanaTestClient::new(run_id, None).await;
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
+    let mut last_event_time = tokio::time::Instant::now();
+    let timeout_duration = Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS);
 
     loop {
         tokio::select! {
@@ -185,34 +182,27 @@ async fn test_two_clients_three_epochs_run() {
                 if let Err(e) = watcher.monitor_clients_health(2).await {
                     panic!("{}", e);
                 }
+                if last_event_time.elapsed() > timeout_duration {
+                    let state = solana_client.get_run_state().await;
+                    let epoch = solana_client.get_current_epoch().await;
+                    let step = solana_client.get_last_step().await;
+                    for i in 1..=2 {
+                        let name = format!("{CLIENT_CONTAINER_PREFIX}-{i}");
+                        let logs = watcher.fetch_container_logs(&name, 200).await;
+                        eprintln!("\n========== Last 200 lines from {name} ==========");
+                        eprintln!("{logs}");
+                        eprintln!("========== End of logs ==========\n");
+                    }
+                    panic!(
+                        "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+                    );
+                }
             }
-            response = async {
-                time::timeout(
-                    Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
-                    watcher.log_rx.recv(),
-                ).await
-            } => {
-                let response = match response {
-                    Ok(Some(response)) => response,
-                    Ok(None) => {
-                        println!("Log channel closed");
-                        break;
-                    }
-                    Err(_) => {
-                        let state = solana_client.get_run_state().await;
-                        let epoch = solana_client.get_current_epoch().await;
-                        let step = solana_client.get_last_step().await;
-                        for i in 1..=2 {
-                            let name = format!("{CLIENT_CONTAINER_PREFIX}-{i}");
-                            let logs = watcher.fetch_container_logs(&name, 200).await;
-                            eprintln!("\n========== Last 200 lines from {name} ==========");
-                            eprintln!("{logs}");
-                            eprintln!("========== End of logs ==========\n");
-                        }
-                        panic!(
-                            "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
-                        );
-                    }
+            response = watcher.log_rx.recv() => {
+                last_event_time = tokio::time::Instant::now();
+                let Some(response) = response else {
+                    println!("Log channel closed");
+                    break;
                 };
 
                 match response {
@@ -262,7 +252,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
     println!("Waiting for run to go on with the first client");
     tokio::time::sleep(Duration::from_secs(60)).await;
 
-    println!("DELETE ME Adding new clients");
+    println!("Adding new clients");
     for i in 1..=n_new_clients {
         spawn_new_client(docker.clone(), None).await.unwrap();
         let _monitor_client = watcher
@@ -279,6 +269,8 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
 
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
     let mut clients_with_model = 0;
+    let mut last_event_time = tokio::time::Instant::now();
+    let timeout_duration = Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS);
 
     loop {
         tokio::select! {
@@ -287,26 +279,21 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                 if let Err(e) = watcher.monitor_clients_health(n_new_clients + 1).await {
                     panic!("{}", e);
                }
-           }
-           response = async {
-               time::timeout(
-                   Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
-                   watcher.log_rx.recv(),
-               ).await
-           } => {
-               let response = match response {
-                   Ok(Some(response)) => response,
-                   Ok(None) => panic!("Log channel closed unexpectedly"),
-                   Err(_) => {
-                       for i in 1..=n_new_clients {
-                           let name = format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1);
-                           let logs = watcher.fetch_container_logs(&name, 200).await;
-                           eprintln!("\n========== Last 200 lines from {name} ==========");
-                           eprintln!("{logs}");
-                           eprintln!("========== End of logs ==========\n");
-                       }
-                       panic!("Timed out waiting for log events after {EPOCH_EVENT_TIMEOUT_SECS}s");
+               if last_event_time.elapsed() > timeout_duration {
+                   for i in 1..=n_new_clients {
+                       let name = format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1);
+                       let logs = watcher.fetch_container_logs(&name, 200).await;
+                       eprintln!("\n========== Last 200 lines from {name} ==========");
+                       eprintln!("{logs}");
+                       eprintln!("========== End of logs ==========\n");
                    }
+                   panic!("Timed out waiting for log events after {EPOCH_EVENT_TIMEOUT_SECS}s");
+               }
+           }
+           response = watcher.log_rx.recv() => {
+               last_event_time = tokio::time::Instant::now();
+               let Some(response) = response else {
+                   panic!("Log channel closed unexpectedly");
                };
                match response {
                      Response::Loss(_client, epoch, _step, _loss) => {
@@ -461,6 +448,8 @@ async fn disconnect_client() {
     let mut untrained_batches: Vec<Vec<u64>> = Vec::new();
     let mut killed_client = false;
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
+    let mut last_event_time = tokio::time::Instant::now();
+    let timeout_duration = Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS);
 
     loop {
         tokio::select! {
@@ -468,26 +457,19 @@ async fn disconnect_client() {
                 if let Err(e) = watcher.monitor_clients_health(3).await {
                     println!("Client crash detected: {}", e);
                 }
+                if last_event_time.elapsed() > timeout_duration {
+                    let state = solana_client.get_run_state().await;
+                    let epoch = solana_client.get_current_epoch().await;
+                    let step = solana_client.get_last_step().await;
+                    panic!(
+                        "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+                    );
+                }
             }
-            result = async {
-                time::timeout(
-                    Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS),
-                    watcher.log_rx.recv(),
-                ).await
-            } => {
-                let response = match result {
-                    Ok(Some(response)) => response,
-                    Ok(None) => {
-                        panic!("Log channel closed unexpectedly");
-                    }
-                    Err(_) => {
-                        let state = solana_client.get_run_state().await;
-                        let epoch = solana_client.get_current_epoch().await;
-                        let step = solana_client.get_last_step().await;
-                        panic!(
-                            "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
-                        );
-                    }
+            response = watcher.log_rx.recv() => {
+                last_event_time = tokio::time::Instant::now();
+                let Some(response) = response else {
+                    panic!("Log channel closed unexpectedly");
                 };
 
                 match response {
