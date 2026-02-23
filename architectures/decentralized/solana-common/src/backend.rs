@@ -463,56 +463,31 @@ impl SolanaBackend {
     }
 
     pub async fn get_minimum_balance_for_rent_exemption(&self, space: usize) -> Result<u64> {
-        Self::rpc_with_fallback(
-            &self.program_coordinators,
-            "get_minimum_balance_for_rent_exemption",
-            |coord| async move {
-                coord
-                    .rpc()
-                    .get_minimum_balance_for_rent_exemption(space)
-                    .await
-                    .map_err(RetryError::from)
-            },
-        )
+        self.rpc_with_fallback(|coord| async move {
+            coord
+                .rpc()
+                .get_minimum_balance_for_rent_exemption(space)
+                .await
+        })
         .await
     }
 
     pub async fn get_balance(&self, address: &Pubkey) -> Result<u64> {
         let address = *address;
-        Self::rpc_with_fallback(
-            &self.program_coordinators,
-            "get_balance",
-            |coord| async move {
-                coord
-                    .rpc()
-                    .get_balance(&address)
-                    .await
-                    .map_err(RetryError::from)
-            },
-        )
-        .await
+        self.rpc_with_fallback(|coord| async move { coord.rpc().get_balance(&address).await })
+            .await
     }
 
     pub async fn get_data(&self, address: &Pubkey) -> Result<Vec<u8>> {
         let address = *address;
-        Self::rpc_with_fallback(
-            &self.program_coordinators,
-            "get_account_data",
-            |coord| async move {
-                coord
-                    .rpc()
-                    .get_account_data(&address)
-                    .await
-                    .map_err(RetryError::from)
-            },
-        )
-        .await
+        self.rpc_with_fallback(|coord| async move { coord.rpc().get_account_data(&address).await })
+            .await
     }
 
     pub async fn get_logs(&self, tx: &Signature) -> Result<Vec<String>> {
         let tx_sig = *tx;
-        let response =
-            Self::rpc_with_fallback(&self.program_coordinators, "get_logs", |coord| async move {
+        let response = self
+            .rpc_with_fallback(|coord| async move {
                 coord
                     .rpc()
                     .get_transaction_with_config(
@@ -524,7 +499,6 @@ impl SolanaBackend {
                         },
                     )
                     .await
-                    .map_err(RetryError::from)
             })
             .await?;
         Ok(response
@@ -541,7 +515,27 @@ impl SolanaBackend {
         instructions: &[Instruction],
         signers: &[Arc<Keypair>],
     ) -> Result<Signature> {
-        Self::send_and_retry_with(&self.program_coordinators, name, instructions, signers).await
+        info!("Sending transaction: {name}");
+        let instructions: Arc<[Instruction]> = instructions.to_vec().into();
+        let signers: Arc<[Arc<Keypair>]> = signers.to_vec().into();
+        let signature = self
+            .rpc_with_fallback(|coord| {
+                let instructions = instructions.clone();
+                let signers = signers.clone();
+                async move {
+                    let mut request = coord.request();
+                    for instruction in instructions.iter() {
+                        request = request.instruction(instruction.clone());
+                    }
+                    for signer in signers.iter() {
+                        request = request.signer(signer.clone());
+                    }
+                    request.send().await
+                }
+            })
+            .await?;
+        info!("Transaction success: {name}, {signature}");
+        Ok(signature)
     }
 
     pub fn spawn_scheduled_send(
@@ -550,16 +544,12 @@ impl SolanaBackend {
         instructions: &[Instruction],
         signers: &[Arc<Keypair>],
     ) {
-        // TODO (vbrunet) - would it be possible to avoid those copies
-        let program_coordinators = self.program_coordinators.to_vec();
+        let backend = self.clone();
         let name = name.to_string();
         let instructions = instructions.to_vec();
         let signers = signers.to_vec();
         tokio::task::spawn(async move {
-            if let Err(err) =
-                Self::send_and_retry_with(&program_coordinators, &name, &instructions, &signers)
-                    .await
-            {
+            if let Err(err) = backend.send_and_retry(&name, &instructions, &signers).await {
                 error!(
                     "Failed to send {} transaction after all retries: {}",
                     name, err
@@ -568,23 +558,24 @@ impl SolanaBackend {
         });
     }
 
-    async fn rpc_with_fallback<T, F, Fut>(
-        program_coordinators: &[Arc<Program<Arc<Keypair>>>],
-        name: &str,
-        f: F,
-    ) -> Result<T>
+    /// Tries the operation against each RPC in order, with retries per RPC.
+    /// Only falls back to the next RPC on retryable errors (network/timeout).
+    /// NonRetryable and Fatal errors are returned immediately — a different RPC
+    /// won't help with e.g. account-not-found or invalid transaction errors.
+    async fn rpc_with_fallback<T, E, F, Fut>(&self, f: F) -> Result<T>
     where
+        E: Into<RetryError<ClientError>> + std::fmt::Display,
         F: Fn(Arc<Program<Arc<Keypair>>>) -> Fut,
-        Fut: Future<Output = Result<T, RetryError<ClientError>>>,
+        Fut: Future<Output = Result<T, E>>,
     {
         let mut last_error = None;
-        for (i, coordinator) in program_coordinators.iter().enumerate() {
+        for (i, coordinator) in self.program_coordinators.iter().enumerate() {
             let coordinator = coordinator.clone();
             let result = retry_function_with_params(
-                &format!("{name} (RPC {i})"),
+                "rpc_with_fallback",
                 || {
                     let coord = coordinator.clone();
-                    f(coord)
+                    async { f(coord).await.map_err(Into::into) }
                 },
                 RPC_INITIAL_BACKOFF_MS,
                 1.5,
@@ -601,51 +592,23 @@ impl SolanaBackend {
                         failed_rpc_index = i,
                         next_rpc_index = i + 1,
                         error = %e,
-                        "{name}: RPC {i} exhausted retries, trying next: {e}",
+                        "RPC {i} exhausted retries, trying next: {e}",
                     );
                     last_error = Some(e);
                 }
                 Err(RetryError::NonRetryable(e)) => {
-                    return Err(anyhow!("{name}: non-retryable error: {e}"));
+                    return Err(anyhow!("non-retryable RPC error: {e}"));
                 }
                 Err(RetryError::Fatal(e)) => {
-                    return Err(anyhow!("{name}: fatal error: {e}"));
+                    return Err(anyhow!("fatal RPC error: {e}"));
                 }
             }
         }
 
         Err(anyhow!(
-            "{name}: all RPCs exhausted: {}",
+            "all RPCs exhausted: {}",
             last_error.map(|e| e.to_string()).unwrap_or_default()
         ))
-    }
-
-    async fn send_and_retry_with(
-        program_coordinators: &[Arc<Program<Arc<Keypair>>>],
-        name: &str,
-        instructions: &[Instruction],
-        signers: &[Arc<Keypair>],
-    ) -> Result<Signature> {
-        info!("Sending transaction: {name}");
-        let instructions = instructions.to_vec();
-        let signers = signers.to_vec();
-        let signature = Self::rpc_with_fallback(program_coordinators, name, |coord| {
-            let instructions = instructions.clone();
-            let signers = signers.clone();
-            async move {
-                let mut request = coord.request();
-                for instruction in &instructions {
-                    request = request.instruction(instruction.clone());
-                }
-                for signer in &signers {
-                    request = request.signer(signer.clone());
-                }
-                request.send().await.map_err(RetryError::from)
-            }
-        })
-        .await?;
-        info!("Transaction success: {name}, {signature}");
-        Ok(signature)
     }
 }
 

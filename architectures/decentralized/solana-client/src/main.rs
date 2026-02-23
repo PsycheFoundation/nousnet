@@ -222,7 +222,7 @@ async fn async_main() -> Result<()> {
             let backup_clusters: Vec<_> = [(rpc_2, ws_rpc_2), (rpc_3, ws_rpc_3)]
                 .into_iter()
                 .filter_map(|(rpc, ws)| {
-                    if rpc.is_empty() && ws.is_empty() {
+                    if rpc.is_empty() || ws.is_empty() {
                         None
                     } else {
                         Some(Cluster::Custom(rpc, ws))
