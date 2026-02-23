@@ -405,19 +405,18 @@ fn resolve_client_authorizer(
     user_pubkey: &Pubkey,
     delegate_authorizer: Option<&Pubkey>,
 ) -> Result<Pubkey> {
-    match coordinator_client.can_user_join_run(run_id, user_pubkey, delegate_authorizer)? {
-        Some(grantee) => {
-            info!("Resolved AUTHORIZER={} for run {}", grantee, run_id);
-            Ok(grantee)
-        }
-        None => {
-            bail!(
-                "User {} is not authorized to join run {}",
-                user_pubkey,
-                run_id
-            );
-        }
-    }
+    let Some(grantee) =
+        coordinator_client.can_user_join_run(run_id, user_pubkey, delegate_authorizer)?
+    else {
+        bail!(
+            "User {} is not authorized to join run {}",
+            user_pubkey,
+            run_id
+        );
+    };
+
+    info!("Resolved AUTHORIZER={} for run {}", grantee, run_id);
+    Ok(grantee)
 }
 
 /// Filter runs to only those that are joinable and authorized for the given user.
