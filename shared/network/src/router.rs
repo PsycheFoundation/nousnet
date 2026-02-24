@@ -96,7 +96,7 @@ mod tests {
     /// 1. Setting up N_CLIENTS routers where only N_ALLOWED are whitelisted
     /// 2. Having each client broadcast a message
     /// 3. Verifying that only messages from allowed clients are received
-    #[test_log::test(tokio::test)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_allowlist() -> Result<()> {
         const N_CLIENTS: u8 = 4;
         const N_ALLOWED: u8 = 3;
@@ -271,6 +271,10 @@ mod tests {
         }
         for task in tasks {
             task.await.expect("panicked");
+        }
+
+        for (_, router, _) in &routers {
+            router.shutdown().await.expect("router shutdown failed");
         }
 
         Ok(())
