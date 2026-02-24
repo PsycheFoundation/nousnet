@@ -390,6 +390,25 @@ async fn get_name_of_new_client_container(docker_client: Arc<Docker>) -> String 
     format!("{CLIENT_CONTAINER_PREFIX}-{}", client_containers.len() + 1)
 }
 
+pub async fn setup_test(n: usize) -> (Arc<Docker>, DockerWatcher, DockerTestCleanup) {
+    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
+    let watcher = DockerWatcher::new(docker.clone());
+    let cleanup = e2e_testing_setup(docker.clone(), n).await;
+    (docker, watcher, cleanup)
+}
+
+/// Common test setup with explicit min_clients and optional owner keypair.
+pub async fn setup_test_with_min(
+    n: usize,
+    min: usize,
+    owner: Option<&Path>,
+) -> (Arc<Docker>, DockerWatcher, DockerTestCleanup) {
+    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
+    let watcher = DockerWatcher::new(docker.clone());
+    let cleanup = e2e_testing_setup_with_min(docker.clone(), n, min, owner).await;
+    (docker, watcher, cleanup)
+}
+
 pub async fn kill_all_clients(docker: &Docker, signal: &str) {
     let options = Some(KillContainerOptions { signal });
     let (_, running_containers) = get_container_names(docker.clone().into()).await;

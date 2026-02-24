@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bollard::{
     Docker,
@@ -8,6 +8,8 @@ use bollard::{
 };
 use futures_util::StreamExt;
 
+use crate::docker_watcher::{DockerWatcher, Response};
+use crate::loss_tracker::{LossResult, LossTracker};
 use crate::utils::SolanaTestClient;
 
 #[derive(Clone, Debug)]
@@ -227,4 +229,27 @@ async fn create_chaos_action_with_command(
         .start_container(&container.id, None::<StartContainerOptions<&str>>)
         .await
         .unwrap();
+}
+
+pub async fn run_chaos_loss_loop(watcher: &mut DockerWatcher, n_clients: u8, target_epoch: u64) {
+    let mut tracker = LossTracker::new(target_epoch, 1.0);
+    let mut liveness_check_interval = tokio::time::interval(Duration::from_secs(10));
+
+    loop {
+        tokio::select! {
+            _ = liveness_check_interval.tick() => {
+                if let Err(e) = watcher.monitor_clients_health(n_clients).await {
+                    panic!("{}", e);
+                }
+            }
+            response = watcher.log_rx.recv() => {
+                if let Some(Response::Loss(client, epoch, step, loss)) = response {
+                    println!("client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}");
+                    if tracker.record(epoch, loss) == LossResult::TargetReached {
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }

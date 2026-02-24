@@ -20,10 +20,11 @@ use psyche_decentralized_testing::{
     CLIENT_CONTAINER_PREFIX, NGINX_PROXY_PREFIX,
     chaos::{ChaosAction, ChaosScheduler},
     docker_setup::{
-        e2e_testing_setup, e2e_testing_setup_with_min, get_container_names, kill_all_clients,
-        spawn_new_client, spawn_new_client_with_monitoring,
+        get_container_names, kill_all_clients, setup_test, setup_test_with_min, spawn_new_client,
+        spawn_new_client_with_monitoring,
     },
     docker_watcher::{DockerWatcher, Response},
+    loss_tracker::{LossResult, LossTracker},
     utils::{SolanaTestClient, write_keypair_to_file},
 };
 use rstest::*;
@@ -36,25 +37,11 @@ use tokio::time;
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
 async fn test_one_clients_three_epochs_run() {
-    // set test variables
     let run_id = "test".to_string();
-
-    // epochs the test will run
-    let num_of_epochs_to_run = 3;
-    let mut current_epoch = -1;
-    let mut last_epoch_loss = f64::MAX;
-
-    // Initialize DockerWatcher
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    // Initialize a Solana run with 1 client
-    let _cleanup = e2e_testing_setup(docker.clone(), 1).await;
-
-    // Monitor the client container
-    let _monitor_client_1 = watcher
-        .monitor_container(
-            &format!("{CLIENT_CONTAINER_PREFIX}-1"),
+    let (_docker, mut watcher, _cleanup) = setup_test(1).await;
+    let _monitors = watcher
+        .monitor_clients(
+            1,
             vec![
                 IntegrationTestLogMarker::StateChange,
                 IntegrationTestLogMarker::Loss,
@@ -62,11 +49,14 @@ async fn test_one_clients_three_epochs_run() {
         )
         .unwrap();
 
-    // Initialize solana client to query the coordinator state
     let solana_client = SolanaTestClient::new(run_id, None).await;
+    let mut tracker = LossTracker::new(3, 1.1);
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
     let mut last_event_time = tokio::time::Instant::now();
     let timeout_duration = Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS);
+    let client_names: Vec<String> = (1..=1u8)
+        .map(|i| format!("{CLIENT_CONTAINER_PREFIX}-{i}"))
+        .collect();
 
     loop {
         tokio::select! {
@@ -75,17 +65,7 @@ async fn test_one_clients_three_epochs_run() {
                     panic!("{}", e);
                 }
                 if last_event_time.elapsed() > timeout_duration {
-                    let state = solana_client.get_run_state().await;
-                    let epoch = solana_client.get_current_epoch().await;
-                    let step = solana_client.get_last_step().await;
-                    let name = format!("{CLIENT_CONTAINER_PREFIX}-1");
-                    let logs = watcher.fetch_container_logs(&name, 200).await;
-                    eprintln!("\n========== Last 200 lines from {name} ==========");
-                    eprintln!("{logs}");
-                    eprintln!("========== End of logs ==========\n");
-                    panic!(
-                        "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
-                    );
+                    watcher.panic_timeout(&solana_client, &client_names).await;
                 }
             }
             response = watcher.log_rx.recv() => {
@@ -104,20 +84,8 @@ async fn test_one_clients_three_epochs_run() {
                     }
                     Response::Loss(client, epoch, step, loss) => {
                         println!("client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}");
-                        // assert that the loss decreases each epoch or at least dont peak
-                        if epoch as i64 > current_epoch {
-                            current_epoch = epoch as i64;
-
-                            let Some(loss) = loss else {
-                                println!("Reached new epoch but loss was NaN");
-                                continue;
-                            };
-
-                            assert!(loss < last_epoch_loss * 1.1);
-                            last_epoch_loss = loss;
-                            if epoch == num_of_epochs_to_run {
-                                break;
-                            }
+                        if tracker.record(epoch, loss) == LossResult::TargetReached {
+                            break;
                         }
                     }
                     _ => unreachable!(),
@@ -133,25 +101,11 @@ async fn test_one_clients_three_epochs_run() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
 async fn test_two_clients_three_epochs_run() {
-    // set test variables
     let run_id = "test".to_string();
-
-    // epochs the test will run
-    let num_of_epochs_to_run = 3;
-    let mut current_epoch = -1;
-    let mut last_epoch_loss = f64::MAX;
-
-    // Initialize DockerWatcher
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    // Initialize a Solana run with 2 clients
-    let _cleanup = e2e_testing_setup(docker.clone(), 2).await;
-
-    // Monitor the client container
-    let _monitor_client_1 = watcher
-        .monitor_container(
-            &format!("{CLIENT_CONTAINER_PREFIX}-1"),
+    let (_docker, mut watcher, _cleanup) = setup_test(2).await;
+    let _monitors = watcher
+        .monitor_clients(
+            2,
             vec![
                 IntegrationTestLogMarker::StateChange,
                 IntegrationTestLogMarker::Loss,
@@ -159,21 +113,14 @@ async fn test_two_clients_three_epochs_run() {
         )
         .unwrap();
 
-    let _monitor_client_2 = watcher
-        .monitor_container(
-            &format!("{CLIENT_CONTAINER_PREFIX}-2"),
-            vec![
-                IntegrationTestLogMarker::StateChange,
-                IntegrationTestLogMarker::Loss,
-            ],
-        )
-        .unwrap();
-
-    // Initialize solana client to query the coordinator state
     let solana_client = SolanaTestClient::new(run_id, None).await;
+    let mut tracker = LossTracker::new(3, 1.1);
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
     let mut last_event_time = tokio::time::Instant::now();
     let timeout_duration = Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS);
+    let client_names: Vec<String> = (1..=2u8)
+        .map(|i| format!("{CLIENT_CONTAINER_PREFIX}-{i}"))
+        .collect();
 
     loop {
         tokio::select! {
@@ -182,19 +129,7 @@ async fn test_two_clients_three_epochs_run() {
                     panic!("{}", e);
                 }
                 if last_event_time.elapsed() > timeout_duration {
-                    let state = solana_client.get_run_state().await;
-                    let epoch = solana_client.get_current_epoch().await;
-                    let step = solana_client.get_last_step().await;
-                    for i in 1..=2 {
-                        let name = format!("{CLIENT_CONTAINER_PREFIX}-{i}");
-                        let logs = watcher.fetch_container_logs(&name, 200).await;
-                        eprintln!("\n========== Last 200 lines from {name} ==========");
-                        eprintln!("{logs}");
-                        eprintln!("========== End of logs ==========\n");
-                    }
-                    panic!(
-                        "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
-                    );
+                    watcher.panic_timeout(&solana_client, &client_names).await;
                 }
             }
             response = watcher.log_rx.recv() => {
@@ -213,20 +148,8 @@ async fn test_two_clients_three_epochs_run() {
                     }
                     Response::Loss(client, epoch, step, loss) => {
                         println!("client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}");
-                        // assert that the loss decreases each epoch
-                        if epoch as i64 > current_epoch {
-                            current_epoch = epoch as i64;
-
-                            let Some(loss) = loss else {
-                                println!("Reached new epoch but loss was NaN");
-                                continue;
-                            };
-
-                            assert!(loss < last_epoch_loss * 1.1);
-                            last_epoch_loss = loss;
-                            if epoch == num_of_epochs_to_run {
-                                break;
-                            }
+                        if tracker.record(epoch, loss) == LossResult::TargetReached {
+                            break;
                         }
                     }
                     _ => unreachable!(),
@@ -242,21 +165,20 @@ async fn test_two_clients_three_epochs_run() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
 async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    // initialize a Solana run with 1 client
-    let _cleanup = e2e_testing_setup(docker.clone(), 1).await;
+    let (docker, mut watcher, _cleanup) = setup_test(1).await;
 
     println!("Waiting for run to go on with the first client");
     tokio::time::sleep(Duration::from_secs(60)).await;
 
     println!("Adding new clients");
-    for i in 1..=n_new_clients {
+    let new_client_names: Vec<String> = (1..=n_new_clients)
+        .map(|i| format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1))
+        .collect();
+    for name in &new_client_names {
         spawn_new_client(docker.clone(), None).await.unwrap();
-        let _monitor_client = watcher
+        watcher
             .monitor_container(
-                &format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1),
+                name,
                 vec![
                     IntegrationTestLogMarker::LoadedModel,
                     IntegrationTestLogMarker::Error,
@@ -279,13 +201,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                     panic!("{}", e);
                }
                if last_event_time.elapsed() > timeout_duration {
-                   for i in 1..=n_new_clients {
-                       let name = format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1);
-                       let logs = watcher.fetch_container_logs(&name, 200).await;
-                       eprintln!("\n========== Last 200 lines from {name} ==========");
-                       eprintln!("{logs}");
-                       eprintln!("========== End of logs ==========\n");
-                   }
+                   watcher.dump_logs(&new_client_names, 200).await;
                    panic!("Timed out waiting for log events after {EPOCH_EVENT_TIMEOUT_SECS}s");
                }
            }
@@ -297,13 +213,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                match response {
                      Response::Loss(_client, epoch, _step, _loss) => {
                           if epoch >= 3 {
-                               for i in 1..=n_new_clients {
-                                   let name = format!("{CLIENT_CONTAINER_PREFIX}-{}", i + 1);
-                                   let logs = watcher.fetch_container_logs(&name, 200).await;
-                                   eprintln!("\n========== Last 200 lines from {name} ==========");
-                                   eprintln!("{logs}");
-                                   eprintln!("========== End of logs ==========\n");
-                               }
+                               watcher.dump_logs(&new_client_names, 200).await;
                                panic!("Epoch 3 started and the clients did not get the model via P2P");
                           }
                      }
@@ -327,13 +237,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
 async fn test_rejoining_client_delay() {
-    // initialize DockerWatcher
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    // initialize a Solana run with 1 client
-    let _cleanup = e2e_testing_setup(docker.clone(), 1).await;
-
+    let (docker, mut watcher, _cleanup) = setup_test(1).await;
     let solana_client = Arc::new(SolanaTestClient::new("test".to_string(), None).await);
 
     tokio::time::sleep(Duration::from_secs(30)).await;
@@ -394,14 +298,7 @@ async fn test_rejoining_client_delay() {
 async fn disconnect_client() {
     // set test variables
     let run_id = "test".to_string();
-
-    // initialize a Solana run with 2 client
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    // Initialize a Solana run with 3 clients, min_clients=2 so the run can
-    // continue after killing one client (giving time for 2+ health checks)
-    let _cleanup = e2e_testing_setup_with_min(docker.clone(), 3, 2, None).await;
+    let (_docker, mut watcher, _cleanup) = setup_test_with_min(3, 2, None).await;
 
     let _monitor_client_1 = watcher
         .monitor_container(
@@ -457,12 +354,7 @@ async fn disconnect_client() {
                     println!("Client crash detected: {}", e);
                 }
                 if last_event_time.elapsed() > timeout_duration {
-                    let state = solana_client.get_run_state().await;
-                    let epoch = solana_client.get_current_epoch().await;
-                    let step = solana_client.get_last_step().await;
-                    panic!(
-                        "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
-                    );
+                    watcher.panic_timeout(&solana_client, &[]).await;
                 }
             }
             response = watcher.log_rx.recv() => {
@@ -593,26 +485,20 @@ async fn drop_a_client_waitingformembers_then_reconnect() {
     let num_of_epochs_to_run = 3;
     let mut current_epoch = -1;
     let run_id = "test".to_string();
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    let _cleanup = e2e_testing_setup(docker.clone(), 2).await;
+    let (docker, mut watcher, _cleanup) = setup_test(2).await;
 
     let solana_client = SolanaTestClient::new(run_id, None).await;
-    // Monitor clients
-    for i in 1..=n_clients {
-        let _monitor_client = watcher
-            .monitor_container(
-                &format!("{CLIENT_CONTAINER_PREFIX}-{i}"),
-                vec![
-                    IntegrationTestLogMarker::Loss,
-                    IntegrationTestLogMarker::StateChange,
-                    IntegrationTestLogMarker::LoadedModel,
-                    IntegrationTestLogMarker::Error,
-                ],
-            )
-            .unwrap();
-    }
+    let _monitors = watcher
+        .monitor_clients(
+            n_clients,
+            vec![
+                IntegrationTestLogMarker::Loss,
+                IntegrationTestLogMarker::StateChange,
+                IntegrationTestLogMarker::LoadedModel,
+                IntegrationTestLogMarker::Error,
+            ],
+        )
+        .unwrap();
 
     let mut train_reached = false;
     while let Some(response) = watcher.log_rx.recv().await {
@@ -680,14 +566,9 @@ async fn drop_a_client_waitingformembers_then_reconnect() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
 async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
-    let num_of_epochs_to_run = 3;
-    let mut current_epoch = -1;
-    let mut last_epoch_loss = f64::MAX;
     let run_id = "test".to_string();
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    let _cleanup = e2e_testing_setup(docker.clone(), 2).await;
+    let (docker, mut watcher, _cleanup) = setup_test(2).await;
+    let mut tracker = LossTracker::new(3, 1.0);
 
     let solana_client = SolanaTestClient::new(run_id, None).await;
     let mut has_spawned_new_client_yet = false;
@@ -706,12 +587,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                 if !has_checked_p2p_checkpoint {
                     if let Err(e) = watcher.monitor_clients_health(2).await {
                         let (all, _) = get_container_names(docker.clone()).await;
-                        for name in &all {
-                            let logs = watcher.fetch_container_logs(name, 200).await;
-                            eprintln!("\n========== Last 200 lines from {name} ==========");
-                            eprintln!("{logs}");
-                            eprintln!("========== End of logs ==========\n");
-                        }
+                        watcher.dump_logs(&all, 200).await;
                         panic!("Client crashed before checkpoint test: {}", e);
                     }
                 }
@@ -767,12 +643,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                         println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
                         has_spawned_new_client_yet = true;
                     } else if round_train_wait_start.unwrap().elapsed() > Duration::from_secs(240) {
-                        for name in &running {
-                            let logs = watcher.fetch_container_logs(name, 200).await;
-                            eprintln!("\n========== Last 200 lines from {name} ==========");
-                            eprintln!("{logs}");
-                            eprintln!("========== End of logs ==========\n");
-                        }
+                        watcher.dump_logs(&running, 200).await;
                         panic!(
                             "Timed out waiting for RoundTrain (240s). Last state: {run_state}, epoch_clients: {}, running_containers: {}",
                             epoch_clients.len(),
@@ -802,12 +673,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
 
                         if hub_wait_iterations >= 30 {
                             let (all, _) = get_container_names(docker.clone()).await;
-                            for name in &all {
-                                let logs = watcher.fetch_container_logs(name, 200).await;
-                                eprintln!("\n========== Last 200 lines from {name} ==========");
-                                eprintln!("{logs}");
-                                eprintln!("========== End of logs ==========\n");
-                            }
+                            watcher.dump_logs(&all, 200).await;
                             panic!(
                                 "Timed out waiting for checkpoint to become Hub (waited ~300s). Checkpoint: {checkpoint:?}",
                             );
@@ -824,20 +690,9 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                         println!(
                             "client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}"
                         );
-                        if epoch as i64 > current_epoch {
-                            current_epoch = epoch as i64;
-
-                            let Some(loss) = loss else {
-                                println!("Reached new epoch but loss was NaN");
-                                continue;
-                            };
-
-                            assert!(loss < last_epoch_loss);
-                            last_epoch_loss = loss;
-                            if epoch == num_of_epochs_to_run {
-                                println!("Epoch {epoch} reached. Stopping");
-                                break;
-                            }
+                        if tracker.record(epoch, loss) == LossResult::TargetReached {
+                            println!("Epoch {epoch} reached. Stopping");
+                            break;
                         }
                     }
                     _ => {}
@@ -1004,15 +859,9 @@ async fn test_solana_subscriptions() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
 async fn test_everybody_leaves_in_warmup() {
-    // set test variables
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-
-    // initialize a Solana run with 1 client
-    let _cleanup = e2e_testing_setup(docker.clone(), 1).await;
+    let (docker, mut watcher, _cleanup) = setup_test(1).await;
     tokio::time::sleep(Duration::from_secs(20)).await;
 
-    // initialize DockerWatcher
-    let mut watcher = DockerWatcher::new(docker.clone());
     let client_1_name = format!("{CLIENT_CONTAINER_PREFIX}-1");
 
     watcher
@@ -1060,12 +909,7 @@ async fn test_everybody_leaves_in_warmup() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[serial]
 async fn test_lost_only_peer_go_back_to_hub_checkpoint() {
-    // Initialize DockerWatcher
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
-
-    // Initialize a Solana run with 1 client, minimum 1 client
-    let _cleanup = e2e_testing_setup(docker.clone(), 1).await;
+    let (docker, mut watcher, _cleanup) = setup_test(1).await;
 
     // Monitor the original client container
     let _monitor_client_1 = watcher
@@ -1148,8 +992,6 @@ async fn test_lost_only_peer_go_back_to_hub_checkpoint() {
 #[serial]
 async fn test_pause_and_resume_run() {
     let run_id = "test".to_string();
-    let docker = Arc::new(Docker::connect_with_socket_defaults().unwrap());
-    let mut watcher = DockerWatcher::new(docker.clone());
 
     // Generate keypairs at runtime
     let owner_keypair = Arc::new(Keypair::new());
@@ -1172,8 +1014,8 @@ async fn test_pause_and_resume_run() {
 
     // Setup with min_clients=1 but init_num_clients=0 (we spawn manually)
     // Pass owner keypair to setup script
-    let _cleanup =
-        e2e_testing_setup_with_min(docker.clone(), 0, 1, Some(owner_path.as_path())).await;
+    let (docker, mut watcher, _cleanup) =
+        setup_test_with_min(0, 1, Some(owner_path.as_path())).await;
 
     // Create SolanaTestClient with owner keypair for set_paused
     let solana_client = SolanaTestClient::new(run_id.clone(), Some(owner_keypair.clone())).await;

@@ -2,6 +2,7 @@ use std::time::SystemTime;
 use std::{sync::Arc, time::Duration};
 
 use crate::CLIENT_CONTAINER_PREFIX;
+use crate::utils::SolanaTestClient;
 use bollard::container::KillContainerOptions;
 use bollard::{Docker, container::LogsOptions};
 use futures_util::StreamExt;
@@ -383,5 +384,53 @@ impl DockerWatcher {
         }
 
         log_lines.join("\n")
+    }
+
+    /// Dump logs from the given containers to stderr for debugging.
+    pub async fn dump_logs(&self, names: &[String], tail: usize) {
+        for name in names {
+            let logs = self.fetch_container_logs(name, tail).await;
+            eprintln!("\n========== Last {tail} lines from {name} ==========");
+            eprintln!("{logs}");
+            eprintln!("========== End of logs ==========\n");
+        }
+    }
+
+    /// Dump the last 200 lines from client containers 1..=n.
+    pub async fn dump_client_logs(&self, n: u8) {
+        let names: Vec<String> = (1..=n)
+            .map(|i| format!("{CLIENT_CONTAINER_PREFIX}-{i}"))
+            .collect();
+        self.dump_logs(&names, 200).await;
+    }
+
+    /// Monitor client containers 1..=n with the same set of log markers.
+    pub fn monitor_clients(
+        &self,
+        n: u8,
+        markers: Vec<IntegrationTestLogMarker>,
+    ) -> Result<Vec<JoinHandle<Result<(), DockerWatcherError>>>, DockerWatcherError> {
+        let mut handles = Vec::new();
+        for i in 1..=n {
+            let handle =
+                self.monitor_container(&format!("{CLIENT_CONTAINER_PREFIX}-{i}"), markers.clone())?;
+            handles.push(handle);
+        }
+        Ok(handles)
+    }
+
+    /// Query coordinator state, dump container logs, then panic with a timeout message.
+    pub async fn panic_timeout(
+        &self,
+        solana_client: &SolanaTestClient,
+        container_names: &[String],
+    ) -> ! {
+        let state = solana_client.get_run_state().await;
+        let epoch = solana_client.get_current_epoch().await;
+        let step = solana_client.get_last_step().await;
+        self.dump_logs(container_names, 200).await;
+        panic!(
+            "Test timed out waiting for events. Coordinator state: {state}, epoch: {epoch}, step: {step}"
+        );
     }
 }
