@@ -705,6 +705,13 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                 // After kill+respawn: check new containers (3 and 4).
                 if !has_checked_p2p_checkpoint {
                     if let Err(e) = watcher.monitor_clients_health(2).await {
+                        let (all, _) = get_container_names(docker.clone()).await;
+                        for name in &all {
+                            let logs = watcher.fetch_container_logs(name, 200).await;
+                            eprintln!("\n========== Last 200 lines from {name} ==========");
+                            eprintln!("{logs}");
+                            eprintln!("========== End of logs ==========\n");
+                        }
                         panic!("Client crashed before checkpoint test: {}", e);
                     }
                 }
@@ -760,6 +767,12 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                         println!("Spawned new client {joined_container_id} to test checkpoint change to Hub");
                         has_spawned_new_client_yet = true;
                     } else if round_train_wait_start.unwrap().elapsed() > Duration::from_secs(240) {
+                        for name in &running {
+                            let logs = watcher.fetch_container_logs(name, 200).await;
+                            eprintln!("\n========== Last 200 lines from {name} ==========");
+                            eprintln!("{logs}");
+                            eprintln!("========== End of logs ==========\n");
+                        }
                         panic!(
                             "Timed out waiting for RoundTrain (240s). Last state: {run_state}, epoch_clients: {}, running_containers: {}",
                             epoch_clients.len(),
@@ -788,6 +801,13 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                         }
 
                         if hub_wait_iterations >= 30 {
+                            let (all, _) = get_container_names(docker.clone()).await;
+                            for name in &all {
+                                let logs = watcher.fetch_container_logs(name, 200).await;
+                                eprintln!("\n========== Last 200 lines from {name} ==========");
+                                eprintln!("{logs}");
+                                eprintln!("========== End of logs ==========\n");
+                            }
                             panic!(
                                 "Timed out waiting for checkpoint to become Hub (waited ~300s). Checkpoint: {checkpoint:?}",
                             );
