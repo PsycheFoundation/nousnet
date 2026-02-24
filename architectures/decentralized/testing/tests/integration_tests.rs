@@ -8,7 +8,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 /// Maximum time to wait between log events before declaring the test stuck.
-/// Warmup takes up to warmup_time (100s), so 6 minutes gives ample margin.
 const EPOCH_EVENT_TIMEOUT_SECS: u64 = 360;
 
 use anchor_client::solana_sdk::signature::{Keypair, Signer};
@@ -625,7 +624,7 @@ async fn drop_a_client_waitingformembers_then_reconnect() {
                 // Once warmup starts, kill client 2's container
                 if new_state == RunState::RoundTrain.to_string() && !train_reached {
                     println!(
-                        "REMOVE ME Train started, killing container {}...",
+                        "Train started, killing container {}...",
                         &format!("{CLIENT_CONTAINER_PREFIX}-2")
                     );
 
@@ -708,10 +707,6 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                     if let Err(e) = watcher.monitor_clients_health(2).await {
                         panic!("Client crashed before checkpoint test: {}", e);
                     }
-                } else if has_spawned_new_client_yet {
-                    // Don't health-check clients during P2P→Hub transition — they may
-                    // crash because the checkpoint is still P2P with no peers available.
-                    // The checkpoint poll below is the actual test assertion.
                 }
 
                 // Show number of connected clients and current state of coordinator
@@ -739,11 +734,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                     continue;
                 }
 
-                // Non-blocking wait for the coordinator to move past WaitingForMembers
-                // before killing clients. If we kill+respawn while the coordinator
-                // is still in WaitingForMembers, the new clients join the current
-                // epoch and count as "previous epoch clients" at the next transition,
-                // preventing the P2P→Hub revert.
+                // Wait for round train to start before killing clients
                 if waiting_for_round_train {
                     let run_state = solana_client.get_run_state().await;
                     let epoch_clients = solana_client.get_current_epoch_clients().await;
@@ -788,8 +779,7 @@ async fn test_when_all_clients_disconnect_checkpoint_is_hub() {
                         hub_wait_iterations += 1;
                         println!("Checkpoint is not Hub yet, waiting... (attempt {hub_wait_iterations}/30)");
 
-                        // Respawn a client if all have crashed — we need live clients
-                        // to keep ticking the coordinator so the epoch can transition.
+                        // If all clients have crashed, we need to spawn some new ones so that they tick and the state changes
                         let (_, running) = get_container_names(docker.clone()).await;
                         if running.is_empty() {
                             println!("All clients crashed, respawning to keep ticking...");
@@ -867,23 +857,18 @@ async fn test_solana_subscriptions() {
 
     let mut live_interval = time::interval(Duration::from_secs(10));
     let mut subscription_events: Vec<(String, String)> = Vec::new();
-    // Deadline prevents the test from hanging if a client gets dropped during
-    // proxy disruption (training halts when min_clients is no longer met).
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+    // timeout that prevents the test from hanging if a client gets dropped during proxy disruption
+    let timeout = tokio::time::Instant::now() + Duration::from_secs(300);
     let mut proxy_disruption_started = false;
 
     loop {
         tokio::select! {
-            _ = tokio::time::sleep_until(deadline) => {
-                eprintln!("Test loop reached deadline, checking collected subscription events");
+            _ = tokio::time::sleep_until(timeout) => {
+                eprintln!("Test loop reached timeout, checking collected subscription events");
                 break;
             }
             _ = live_interval.tick() => {
-                // During proxy disruption, a client may be marked "Dropped" by the
-                // coordinator (missed a round while both subscriptions were briefly
-                // down due to Docker networking). Skip health checks once proxy
-                // operations begin since the subscription event assertions are the
-                // real verification for this test.
+                // Do not monitor health-checks during proxy disruption, since we care about reconnect.
                 if !proxy_disruption_started {
                     if let Err(e) = watcher.monitor_clients_health(2).await {
                         panic!("{}", e);
