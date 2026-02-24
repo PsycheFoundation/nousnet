@@ -35,7 +35,11 @@ impl LossTracker {
 
         let Some(loss) = loss else {
             println!("Reached new epoch but loss was NaN");
-            return LossResult::EpochRecorded;
+            return if epoch >= self.target_epoch {
+                LossResult::TargetReached
+            } else {
+                LossResult::EpochRecorded
+            };
         };
 
         assert!(
