@@ -80,4 +80,6 @@ pub fn set_torch_rng_seed() {
 pub fn set_suggested_env_vars() {
     std::env::set_var("NCCL_P2P_DIRECT_DISABLE", "1");
     std::env::set_var("NCCL_LAUNCH_MODE", "GROUP");
+    std::env::set_var("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1");
+    std::env::set_var("NCCL_TIMEOUT", "600");
 }
