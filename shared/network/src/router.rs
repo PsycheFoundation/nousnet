@@ -6,10 +6,10 @@ use iroh_gossip::net::Gossip;
 
 use iroh::{
     Endpoint,
-    protocol::{AccessLimit, ProtocolHandler, Router},
+    protocol::{ProtocolHandler, Router},
 };
 
-use crate::{Allowlist, ModelSharing, p2p_model_sharing};
+use crate::{ModelSharing, p2p_model_sharing};
 
 pub struct SupportedProtocols(Gossip, BlobsProtocol, ModelSharing);
 
@@ -23,40 +23,19 @@ impl SupportedProtocols {
     }
 }
 
-pub(crate) fn spawn_router_with_allowlist<
-    A: Allowlist + 'static + Send + std::marker::Sync,
-    P: ProtocolHandler + Clone,
->(
-    allowlist: A,
+pub(crate) fn spawn_router<P: ProtocolHandler + Clone>(
     endpoint: Endpoint,
     protocols: SupportedProtocols,
     additional_protocol: Option<(&'static [u8], P)>,
 ) -> Result<Arc<Router>> {
-    let allowlist_clone = allowlist.clone();
-    let allowlisted_blobs = AccessLimit::new(protocols.1, move |endpoint_id| {
-        allowlist_clone.allowed(endpoint_id)
-    });
-    let allowlist_clone_2 = allowlist.clone();
-    let allowlisted_gossip = AccessLimit::new(protocols.0.clone(), move |endpoint_id| {
-        allowlist_clone_2.allowed(endpoint_id)
-    });
-    let allowlist_clone_3 = allowlist.clone();
-    let allowlisted_model_sharing = AccessLimit::new(protocols.2.clone(), move |endpoint_id| {
-        allowlist_clone_3.allowed(endpoint_id)
-    });
-
     let mut builder = Router::builder(endpoint.clone())
-        .accept(iroh_blobs::ALPN, allowlisted_blobs)
-        .accept(iroh_gossip::ALPN, allowlisted_gossip)
-        .accept(p2p_model_sharing::ALPN, allowlisted_model_sharing);
+        .accept(iroh_gossip::ALPN, protocols.0)
+        .accept(iroh_blobs::ALPN, protocols.1)
+        .accept(p2p_model_sharing::ALPN, protocols.2);
 
     // add optional custom protocol if provided
     if let Some((alpn, handler)) = additional_protocol {
-        let allowlist_clone = allowlist.clone();
-        let allowlisted_handler = AccessLimit::new(handler, move |endpoint_id| {
-            allowlist_clone.allowed(endpoint_id)
-        });
-        builder = builder.accept(alpn, allowlisted_handler);
+        builder = builder.accept(alpn, handler);
     }
 
     let router = Arc::new(builder.spawn());
@@ -79,7 +58,7 @@ mod tests {
     use rand::Fill;
     use tokio_stream::StreamExt;
 
-    use crate::allowlist::{self, AllowDynamic};
+    use crate::allowlist::{AllowDynamic, AllowlistHook};
 
     use super::*;
 
@@ -95,10 +74,8 @@ mod tests {
             tokio::sync::mpsc::unbounded_channel();
         let (tx_model_config_req, _rx_model_config_req) = tokio::sync::mpsc::unbounded_channel();
         let p2p_model_sharing = ModelSharing::new(tx_model_parameter_req, tx_model_config_req);
-        let allowlist = allowlist::AllowAll;
         let blobs_protocol = BlobsProtocol::new(&blobs, None);
-        let router = spawn_router_with_allowlist::<_, iroh_gossip::net::Gossip>(
-            allowlist.clone(),
+        let router = spawn_router::<iroh_gossip::net::Gossip>(
             endpoint.clone(),
             SupportedProtocols::new(gossip.clone(), blobs_protocol, p2p_model_sharing),
             None,
@@ -154,16 +131,14 @@ mod tests {
                         .relay_mode(RelayMode::Disabled)
                         .clear_address_lookup()
                         .address_lookup(static_discovery.clone())
+                        .hooks(AllowlistHook::new(allowlist))
                         .bind()
                         .await?;
                     let gossip = Gossip::builder().spawn(endpoint.clone());
 
-                    let allowlisted_gossip = AccessLimit::new(gossip.clone(), move |endpoint_id| {
-                        allowlist.allowed(endpoint_id)
-                    });
                     let router = Arc::new(
                         Router::builder(endpoint.clone())
-                            .accept(iroh_gossip::ALPN, allowlisted_gossip)
+                            .accept(iroh_gossip::ALPN, gossip.clone())
                             .spawn(),
                     );
 
