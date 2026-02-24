@@ -339,12 +339,12 @@ test-model-loading initial_model="gpt2":
     # Start inference node 1 with initial model
     echo "Starting inference node 1 (with model: {{ initial_model }})..."
     tmux new-window -t $SESSION -n node1
-    tmux send-keys -t $SESSION:node1 "PSYCHE_GATEWAY_BOOTSTRAP_FILE=$GATEWAY_PEER_FILE RUST_LOG=info,psyche_network=debug nix run .#psyche-inference-node -- --model-name {{ initial_model }} --discovery-mode local --relay-kind n0 --tensor-parallel-size 1 --gpu-memory-utilization 0.5" C-m
+    tmux send-keys -t $SESSION:node1 "PSYCHE_GATEWAY_BOOTSTRAP_FILE=$GATEWAY_PEER_FILE RUST_LOG=info,psyche_network=debug nix run .#psyche-inference-node -- --model-name {{ initial_model }} --discovery-mode local --relay-kind n0 --tensor-parallel-size 1 --gpu-memory-utilization 0.35" C-m
 
     # Start inference node 2 without model (idle mode)
     echo "Starting inference node 2 (idle mode - no initial model)..."
     tmux new-window -t $SESSION -n node2
-    tmux send-keys -t $SESSION:node2 "PSYCHE_GATEWAY_BOOTSTRAP_FILE=$GATEWAY_PEER_FILE RUST_LOG=info,psyche_network=debug nix run .#psyche-inference-node -- --discovery-mode local --relay-kind n0 --tensor-parallel-size 1 --gpu-memory-utilization 0.5" C-m
+    tmux send-keys -t $SESSION:node2 "PSYCHE_GATEWAY_BOOTSTRAP_FILE=$GATEWAY_PEER_FILE RUST_LOG=info,psyche_network=debug nix run .#psyche-inference-node -- --discovery-mode local --relay-kind n0 --tensor-parallel-size 1 --gpu-memory-utilization 0.35" C-m
 
     sleep 5
     echo ""
@@ -373,7 +373,7 @@ test-model-loading initial_model="gpt2":
     tmux send-keys -t $SESSION:test "────────────────────────────────────────────────────────────────" C-m
     tmux send-keys -t $SESSION:test "curl -X POST http://127.0.0.1:8000/admin/load-model \\\\" C-m
     tmux send-keys -t $SESSION:test "  -H 'Content-Type: application/json' \\\\" C-m
-    tmux send-keys -t $SESSION:test "  -d '{\"model_name\": \"meta-llama/Llama-3.2-1B-Instruct\", \"source_type\": \"huggingface\"}'" C-m
+    tmux send-keys -t $SESSION:test "  -d '{\"model_name\": \"gpt2\", \"source_type\": \"huggingface\"}'" C-m
     tmux send-keys -t $SESSION:test "" C-m
     tmux send-keys -t $SESSION:test "Expected: Both nodes reload with new model" C-m
     tmux send-keys -t $SESSION:test "" C-m
