@@ -5,11 +5,11 @@ use iroh_blobs::BlobsProtocol;
 use iroh_gossip::net::Gossip;
 
 use iroh::{
-    protocol::{ProtocolHandler, Router},
     Endpoint,
+    protocol::{ProtocolHandler, Router},
 };
 
-use crate::{p2p_model_sharing, ModelSharing};
+use crate::{ModelSharing, p2p_model_sharing};
 
 pub struct SupportedProtocols(Gossip, BlobsProtocol, ModelSharing);
 
@@ -48,7 +48,7 @@ mod tests {
     use std::time::Duration;
 
     use futures_util::future::join_all;
-    use iroh::{address_lookup::memory::MemoryLookup, Endpoint, RelayMode, SecretKey};
+    use iroh::{Endpoint, RelayMode, SecretKey, address_lookup::memory::MemoryLookup};
     use iroh_blobs::store::mem::MemStore;
     use iroh_gossip::{
         api::{Event, Message},

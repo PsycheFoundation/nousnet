@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
-use iroh::endpoint::{AfterHandshakeOutcome, ConnectionInfo, EndpointHooks};
 use iroh::EndpointId;
+use iroh::endpoint::{AfterHandshakeOutcome, ConnectionInfo, EndpointHooks};
 
 pub trait Allowlist: std::fmt::Debug + Clone {
     fn allowed(&self, addr: EndpointId) -> bool;

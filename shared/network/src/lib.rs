@@ -1,16 +1,16 @@
 use allowlist::Allowlist;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use download::{DownloadManager, DownloadManagerEvent, DownloadUpdate};
 use futures_util::{StreamExt, TryFutureExt};
-use iroh::{endpoint::QuicTransportConfig, protocol::Router};
 use iroh::{EndpointAddr, RelayConfig};
+use iroh::{endpoint::QuicTransportConfig, protocol::Router};
 use iroh_blobs::api::Tag;
 use iroh_blobs::store::GcConfig;
 use iroh_blobs::{
+    BlobsProtocol,
     api::downloader::Downloader,
     store::mem::{MemStore, Options as MemStoreOptions},
-    BlobsProtocol,
 };
 use iroh_gossip::{
     api::{GossipReceiver, GossipSender},
@@ -19,11 +19,11 @@ use iroh_gossip::{
 };
 use iroh_n0des::ApiSecret;
 pub use p2p_model_sharing::{
-    ModelConfigSharingMessage, ParameterSharingMessage, PeerManagerHandle,
-    MODEL_REQUEST_TIMEOUT_SECS,
+    MODEL_REQUEST_TIMEOUT_SECS, ModelConfigSharingMessage, ParameterSharingMessage,
+    PeerManagerHandle,
 };
 use psyche_metrics::{ClientMetrics, PeerConnection};
-use router::{spawn_router, SupportedProtocols};
+use router::{SupportedProtocols, spawn_router};
 use state::State;
 use std::str::FromStr;
 use std::{
@@ -43,15 +43,15 @@ use tokio::{
 };
 use tokio::{
     sync::mpsc,
-    time::{interval, Interval},
+    time::{Interval, interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, debug_span, error, info, trace, warn, Instrument};
+use tracing::{Instrument, debug, debug_span, error, info, trace, warn};
 use util::{fmt_relay_mode, gossip_topic};
 
 pub use ed25519_dalek::Signature;
 pub use iroh::RelayMode;
-pub use iroh_blobs::{ticket::BlobTicket, BlobFormat, Hash};
+pub use iroh_blobs::{BlobFormat, Hash, ticket::BlobTicket};
 
 pub mod allowlist;
 mod authenticable_identity;
@@ -74,7 +74,7 @@ mod util;
 #[cfg(test)]
 mod test;
 
-pub use authenticable_identity::{raw_p2p_verify, AuthenticatableIdentity, FromSignedBytesError};
+pub use authenticable_identity::{AuthenticatableIdentity, FromSignedBytesError, raw_p2p_verify};
 pub use connection_monitor::{ConnectionData, ConnectionMonitor};
 pub use download::{
     DownloadComplete, DownloadFailed, DownloadSchedulerHandle, DownloadType, ReadyRetry,
@@ -85,12 +85,12 @@ pub use iroh::{Endpoint, EndpointId, PublicKey, SecretKey};
 use iroh_relay::{RelayMap, RelayQuicConfig};
 pub use latency_sorted::LatencySorted;
 pub use p2p_model_sharing::{
-    ModelRequestType, SharableModel, SharableModelError, TransmittableModelConfig, ALPN,
+    ALPN, ModelRequestType, SharableModel, SharableModelError, TransmittableModelConfig,
 };
 pub use serde::Networkable;
 pub use serialized_distro::{
-    distro_results_from_reader, distro_results_to_bytes, SerializeDistroResultError,
-    SerializedDistroResult, TransmittableDistroResult,
+    SerializeDistroResultError, SerializedDistroResult, TransmittableDistroResult,
+    distro_results_from_reader, distro_results_to_bytes,
 };
 pub use signed_message::SignedMessage;
 pub use tcp::{ClientNotification, TcpClient, TcpServer};
