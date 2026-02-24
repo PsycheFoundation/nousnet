@@ -25,6 +25,13 @@ use tracing::{debug, error, info, warn};
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+#[derive(Debug, Clone)]
+enum ModelLoadState {
+    Idle,
+    Loading(String),
+    Loaded(String),
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "psyche-inference-node")]
 struct Cli {
@@ -109,11 +116,10 @@ async fn main() -> Result<()> {
     };
 
     info!("Starting Psyche Inference Node");
-    if let Some(ref model) = run_args.model_name {
-        info!("Model: {}", model);
-    } else {
-        info!("Model: <idle - will load on request>");
-    }
+    info!(
+        "  Model: {}",
+        run_args.model_name.as_deref().unwrap_or("<idle>")
+    );
     info!("Tensor Parallel Size: {}", run_args.tensor_parallel_size);
     info!(
         "GPU Memory Utilization: {}",
@@ -167,8 +173,11 @@ async fn main() -> Result<()> {
         Arc::new(RwLock::new(None))
     };
 
-    let current_model_name = Arc::new(RwLock::new(run_args.model_name.clone()));
-    let is_loading = Arc::new(RwLock::new(false));
+    let model_state = Arc::new(RwLock::new(if let Some(ref model) = run_args.model_name {
+        ModelLoadState::Loaded(model.clone())
+    } else {
+        ModelLoadState::Idle
+    }));
     let tensor_parallel_size = run_args.tensor_parallel_size;
     let gpu_memory_utilization = run_args.gpu_memory_utilization;
 
@@ -213,7 +222,10 @@ async fn main() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // announce availability via gossip
-    let model_name_for_broadcast = current_model_name.read().await.clone();
+    let model_name_for_broadcast = match &*model_state.read().await {
+        ModelLoadState::Loaded(name) => Some(name.clone()),
+        _ => None,
+    };
     let availability_msg = InferenceGossipMessage::NodeAvailable {
         model_name: model_name_for_broadcast.clone(),
         checkpoint_id: None,
@@ -224,11 +236,10 @@ async fn main() -> Result<()> {
         .broadcast(&availability_msg)
         .context("Failed to broadcast availability")?;
 
-    if let Some(ref model) = model_name_for_broadcast {
-        info!("Broadcasted availability to network (model: {})", model);
-    } else {
-        info!("Broadcasted idle status to network (no model loaded)");
-    }
+    info!(
+        "Broadcasted availability to network (model: {})",
+        model_name_for_broadcast.as_deref().unwrap_or("<idle>")
+    );
     info!("Inference node ready! Listening for requests...");
 
     // heartbeat for re-announcing availability
@@ -248,7 +259,10 @@ async fn main() -> Result<()> {
             }
 
             _ = heartbeat_interval.tick() => {
-                let model_name_for_broadcast = current_model_name.read().await.clone();
+                let model_name_for_broadcast = match &*model_state.read().await {
+                    ModelLoadState::Loaded(name) => Some(name.clone()),
+                    _ => None,
+                };
                 let availability_msg = InferenceGossipMessage::NodeAvailable {
                     model_name: model_name_for_broadcast.clone(),
                     checkpoint_id: None,
@@ -280,31 +294,31 @@ async fn main() -> Result<()> {
                                 info!("Received LoadModel request from {}: model={}, source={:?}",
                                       peer_id.fmt_short(), requested_model, model_source);
 
-                                let model_path = match model_source {
-                                    ModelSource::HuggingFace(ref name) => name.clone(),
-                                    ModelSource::Local(ref path) => path.clone(),
+                                let model_path = match model_source.clone() {
+                                    ModelSource::HuggingFace(name) | ModelSource::Local(name) => name,
                                 };
 
-                                let model_already_loaded = {
-                                    let current = current_model_name.read().await;
-                                    current.as_ref() == Some(&requested_model)
+                                let should_load = match &*model_state.read().await {
+                                    ModelLoadState::Loaded(name) if name == &requested_model => {
+                                        info!("Model {} already loaded, skipping", requested_model);
+                                        false
+                                    }
+                                    ModelLoadState::Loading(name) => {
+                                        info!("Model load already in progress ({}), skipping concurrent load request for {}",
+                                              name, requested_model);
+                                        false
+                                    }
+                                    _ => true,
                                 };
 
-                                let already_loading = *is_loading.read().await;
-
-                                if model_already_loaded {
-                                    info!("Model {} already loaded, skipping", requested_model);
-                                } else if already_loading {
-                                    info!("Model load already in progress, skipping concurrent load request for {}", requested_model);
-                                } else {
-                                    *is_loading.write().await = true;
+                                if should_load {
+                                    *model_state.write().await = ModelLoadState::Loading(requested_model.clone());
                                     info!("Loading new model: {} (background task)", requested_model);
 
                                     // Spawn background task to avoid blocking the event loop
                                     // Model loading can take 10-60+ seconds, so we don't want to block heartbeats
                                     let inference_node_shared_clone = inference_node_shared.clone();
-                                    let current_model_name_clone = current_model_name.clone();
-                                    let is_loading_clone = is_loading.clone();
+                                    let model_state_clone = model_state.clone();
                                     let requested_model_clone = requested_model.clone();
 
                                     tokio::spawn(async move {
@@ -320,8 +334,6 @@ async fn main() -> Result<()> {
                                             info!("Waiting 5s for GPU memory to be released...");
                                             tokio::time::sleep(Duration::from_secs(5)).await;
                                         }
-
-                                        *current_model_name_clone.write().await = None;
 
                                         // Load new model (blocking operation)
                                         let load_result = (|| -> Result<InferenceNode> {
@@ -341,9 +353,8 @@ async fn main() -> Result<()> {
 
                                         match load_result {
                                             Ok(new_node) => {
-                                                // update model name first, then node, to maintain consistency
-                                                *current_model_name_clone.write().await = Some(requested_model_clone.clone());
                                                 *inference_node_shared_clone.write().await = Some(new_node);
+                                                *model_state_clone.write().await = ModelLoadState::Loaded(requested_model_clone.clone());
 
                                                 info!("Successfully loaded model: {}", requested_model_clone);
                                                 // Note: NodeAvailable will be broadcast on next heartbeat (every 30s)
@@ -351,10 +362,10 @@ async fn main() -> Result<()> {
                                             }
                                             Err(e) => {
                                                 error!("Failed to load model {}: {:#}", requested_model_clone, e);
+                                                // Set back to Idle on failure
+                                                *model_state_clone.write().await = ModelLoadState::Idle;
                                             }
                                         }
-
-                                        *is_loading_clone.write().await = false;
                                     });
                                 }
                             }

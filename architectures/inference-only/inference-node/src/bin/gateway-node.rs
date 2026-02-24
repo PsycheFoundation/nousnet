@@ -99,21 +99,23 @@ fn default_top_p() -> Option<f64> {
     Some(1.0)
 }
 
-#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-enum ModelSourceType {
-    #[default]
-    HuggingFace,
-    Local,
+#[derive(serde::Deserialize, Debug, Clone)]
+#[serde(tag = "source_type", rename_all = "lowercase")]
+enum LoadModelSource {
+    #[serde(rename = "huggingface")]
+    HuggingFace {
+        source_path: Option<String>,
+    },
+    Local {
+        source_path: String,
+    },
 }
 
 #[derive(serde::Deserialize)]
 struct LoadModelRequest {
     model_name: String,
-    #[serde(default)]
-    source_type: ModelSourceType,
-    #[serde(default)]
-    source_path: Option<String>,
+    #[serde(flatten)]
+    source: LoadModelSource,
 }
 
 #[derive(serde::Serialize)]
@@ -140,8 +142,10 @@ async fn handle_inference(
 ) -> Result<Json<ChatCompletionResponse>, AppError> {
     let nodes = state.available_nodes.read().await;
 
-    // Filter nodes that have a model loaded (not idle)
-    let nodes_with_model: Vec<_> = nodes.values().filter(|n| n.model_name.is_some()).collect();
+    let nodes_with_model: Vec<(EndpointId, String)> = nodes
+        .values()
+        .filter_map(|n| Some((n.peer_id, n.model_name.clone()?)))
+        .collect();
 
     if nodes_with_model.is_empty() {
         // No nodes have models loaded yet
@@ -150,19 +154,15 @@ async fn handle_inference(
 
     // Select first available node with a model
     // TODO: Add load balancing and model-specific routing in the future
-    let node = nodes_with_model[0];
-    let target_peer_id = node.peer_id;
+    let (target_peer_id, node_model_name) = &nodes_with_model[0];
+    let target_peer_id = *target_peer_id;
 
-    let model_name = req
-        .model
-        .clone()
-        .or_else(|| node.model_name.clone())
-        .unwrap_or_else(|| "unknown".to_string());
+    let model_name = req.model.clone().unwrap_or_else(|| node_model_name.clone());
 
     info!(
         "Routing request to node: {} (model: {})",
         target_peer_id.fmt_short(),
-        node.model_name.as_deref().unwrap_or("unknown")
+        node_model_name
     );
     drop(nodes);
 
@@ -239,20 +239,15 @@ async fn handle_load_model(
 
     info!(
         "Admin API: Received LoadModel request for model: {} (source: {:?})",
-        req.model_name, req.source_type
+        req.model_name, req.source
     );
 
-    let model_source = match req.source_type {
-        ModelSourceType::HuggingFace => {
-            let path = req.source_path.unwrap_or_else(|| req.model_name.clone());
+    let model_source = match req.source {
+        LoadModelSource::HuggingFace { source_path } => {
+            let path = source_path.unwrap_or_else(|| req.model_name.clone());
             ModelSource::HuggingFace(path)
         }
-        ModelSourceType::Local => {
-            let path = req.source_path.ok_or_else(|| {
-                AppError::BadRequest("source_path is required for local models".to_string())
-            })?;
-            ModelSource::Local(path)
-        }
+        LoadModelSource::Local { source_path } => ModelSource::Local(source_path),
     };
 
     let load_msg = InferenceGossipMessage::LoadModel {
@@ -280,7 +275,6 @@ enum AppError {
     NoNodesAvailable,
     Timeout,
     InternalError,
-    BadRequest(String),
 }
 
 impl IntoResponse for AppError {
@@ -298,7 +292,6 @@ impl IntoResponse for AppError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal server error".to_string(),
             ),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
         };
         (status, message).into_response()
     }
@@ -524,11 +517,7 @@ async fn run_gateway() -> Result<()> {
                                     InferenceGossipMessage::NodeAvailable { model_name, checkpoint_id, capabilities } => {
                                         info!("Discovered inference node!");
                                         info!("  Peer ID: {}", peer_id.fmt_short());
-                                        if let Some(ref model) = model_name {
-                                            info!("  Model: {}", model);
-                                        } else {
-                                            info!("  Model: <idle>");
-                                        }
+                                        info!("  Model: {}", model_name.as_deref().unwrap_or("<idle>"));
                                         info!("  Checkpoint: {:?}", checkpoint_id);
                                         info!("  Capabilities: {:?}", capabilities);
 

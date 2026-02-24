@@ -147,11 +147,7 @@ async fn main() -> Result<()> {
                                 peer_count += 1;
                                 info!("PEER DISCOVERED!");
                                 info!("  Peer ID: {}", peer_id.fmt_short());
-                                if let Some(ref model) = model_name {
-                                    info!("  Model: {}", model);
-                                } else {
-                                    info!("  Model: <idle>");
-                                }
+                                info!("  Model: {}", model_name.as_deref().unwrap_or("<idle>"));
                                 info!("  Checkpoint: {:?}", checkpoint_id);
                                 info!("  Capabilities: {:?}", capabilities);
                                 info!("  Total peers seen: {}", peer_count);
