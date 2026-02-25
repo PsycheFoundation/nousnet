@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -65,8 +65,9 @@ pub struct App {
     pub waterfall_zoom: usize,
     /// Index of the first timeline entry visible in the waterfall window.
     pub waterfall_x_scroll: usize,
-    /// When set, the waterfall only shows events of this category.
-    pub waterfall_filter: Option<EventCategory>,
+    /// Set of active category filters. Events match if their category is in this set.
+    /// Empty set means show all events.
+    pub waterfall_filter: HashSet<EventCategory>,
     cached_snapshot: Option<(usize, ClusterSnapshot)>,
     /// Tracks when each node was first observed for lifetime bps calculation.
     node_first_seen: HashMap<String, Instant>,
@@ -118,7 +119,7 @@ impl App {
             batch_scroll: 0,
             waterfall_zoom: 20,
             waterfall_x_scroll: 0,
-            waterfall_filter: None,
+            waterfall_filter: HashSet::new(),
             cached_snapshot: None,
             node_first_seen: HashMap::new(),
         }
@@ -244,13 +245,13 @@ impl App {
         }
     }
 
-    /// Toggle a category filter on the waterfall (press same key again to clear).
+    /// Toggle a category filter on the waterfall (press same key again to remove).
     pub fn toggle_category_filter(&mut self, cat: EventCategory) {
-        self.waterfall_filter = if self.waterfall_filter == Some(cat) {
-            None
+        if self.waterfall_filter.contains(&cat) {
+            self.waterfall_filter.remove(&cat);
         } else {
-            Some(cat)
-        };
+            self.waterfall_filter.insert(cat);
+        }
     }
 
     pub fn cycle_detail_panel(&mut self) {

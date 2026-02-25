@@ -9,10 +9,10 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Paragraph, Widget},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// Public event category used for filtering and the category picker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventCategory {
     Error,
     Train,
@@ -135,8 +135,9 @@ pub struct WaterfallWidget<'a> {
     pub zoom: usize,
     /// Index of the first timeline entry in the visible window.
     pub x_scroll: usize,
-    /// When set, only events of this category are shown on tracks.
-    pub filter: Option<EventCategory>,
+    /// Set of active category filters. Events match if their category is in this set.
+    /// Empty set means show all events.
+    pub filter: &'a HashSet<EventCategory>,
 }
 
 impl<'a> Widget for WaterfallWidget<'a> {
@@ -177,10 +178,12 @@ impl<'a> Widget for WaterfallWidget<'a> {
             match entry {
                 TimelineEntry::Node { node_id, event, .. } => {
                     let cat = categorize(&event.data);
-                    if let Some(f) = self.filter
-                        && !priority_matches(cat, f)
-                    {
-                        continue;
+                    // If filter is non-empty, only show events whose category is in the filter.
+                    if !self.filter.is_empty() {
+                        let matches = self.filter.iter().any(|&f| priority_matches(cat, f));
+                        if !matches {
+                            continue;
+                        }
                     }
                     let name = event.data.to_string();
                     let slot_entry = node_events
@@ -193,8 +196,8 @@ impl<'a> Widget for WaterfallWidget<'a> {
                     }
                 }
                 TimelineEntry::Coordinator { state, .. } => {
-                    if let Some(f) = self.filter
-                        && f != EventCategory::Coordinator
+                    // If filter is non-empty, only show if Coordinator is in the filter.
+                    if !self.filter.is_empty() && !self.filter.contains(&EventCategory::Coordinator)
                     {
                         continue;
                     }
@@ -357,14 +360,17 @@ impl<'a> Widget for WaterfallWidget<'a> {
         // cursor. When nothing is selected, use whatever is at the cursor.
         let selected_entity = self.selected_node_idx.and_then(|i| self.node_ids.get(i));
         let passes_filter = |entry: &&TimelineEntry| -> bool {
-            match self.filter {
-                None => true,
-                Some(f) => match entry {
-                    TimelineEntry::Node { event, .. } => {
-                        priority_matches(categorize(&event.data), f)
-                    }
-                    TimelineEntry::Coordinator { .. } => f == EventCategory::Coordinator,
-                },
+            if self.filter.is_empty() {
+                return true;
+            }
+            match entry {
+                TimelineEntry::Node { event, .. } => {
+                    let cat = categorize(&event.data);
+                    self.filter.iter().any(|&f| priority_matches(cat, f))
+                }
+                TimelineEntry::Coordinator { .. } => {
+                    self.filter.contains(&EventCategory::Coordinator)
+                }
             }
         };
         // Only show the detail box when the cursor is *exactly* on a matching entry.
@@ -445,7 +451,7 @@ impl<'a> Widget for WaterfallWidget<'a> {
         let picker_spans: Vec<ratatui::text::Span> = ALL_CATEGORIES
             .iter()
             .flat_map(|&cat| {
-                let active = self.filter == Some(cat);
+                let active = self.filter.contains(&cat);
                 let base = if active {
                     Style::default()
                         .fg(Color::Black)

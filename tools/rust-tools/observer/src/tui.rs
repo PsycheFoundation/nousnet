@@ -52,7 +52,7 @@ pub fn run(mut app: App) -> io::Result<()> {
             let timeline = &app.timeline;
             let waterfall_zoom = app.waterfall_zoom;
             let waterfall_x_scroll = app.waterfall_x_scroll;
-            let waterfall_filter = app.waterfall_filter;
+            let waterfall_filter = &app.waterfall_filter;
             let all_node_ids = timeline.all_entity_ids();
             let selected_node_id: Option<String> =
                 selected.and_then(|i| all_node_ids.get(i).cloned());
@@ -172,7 +172,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                             node_scroll,
                             zoom: waterfall_zoom,
                             x_scroll: waterfall_x_scroll,
-                            filter: waterfall_filter,
+                            filter: &waterfall_filter,
                         },
                         inner,
                     ),

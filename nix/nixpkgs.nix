@@ -32,6 +32,13 @@ in
             liger-kernel = pyfinal.callPackage ../python/liger-kernel.nix { };
             torchtitan = pyfinal.callPackage ../python/torchtitan.nix { };
             torchdata = pyfinal.callPackage ../python/torchdata.nix { };
+
+            # Remove pyside6 dependency from gguf
+            gguf = pyprev.gguf.overrideAttrs (old: {
+              propagatedBuildInputs = prev.lib.filter (dep: !(dep ? pname && dep.pname == "pyside6")) (
+                old.propagatedBuildInputs or [ ]
+              );
+            });
           };
         };
       })
