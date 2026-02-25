@@ -237,7 +237,7 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
            response = watcher.log_rx.recv() => {
                match response {
                      Some(Response::Loss(_client, epoch, step, _loss)) => {
-                          if epoch == 1 && step > 22 {
+                          if epoch >= 2 {
                                panic!("Second epoch started and the clients did not get the model");
                           }
                      }
@@ -725,7 +725,7 @@ async fn test_solana_subscriptions() {
                         }
 
                         // shutdown subscription 1
-                        if step == 5 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 2 && new_state == RunState::RoundWitness.to_string(){
                             println!("stop container {NGINX_PROXY_PREFIX}-1");
 
                             docker
@@ -735,7 +735,7 @@ async fn test_solana_subscriptions() {
 
                         }
                         // resume subscription 1
-                        if step == 15 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 5 && new_state == RunState::RoundWitness.to_string(){
                             println!("resume container {NGINX_PROXY_PREFIX}-1");
                             docker
                                 .start_container(&format!("{NGINX_PROXY_PREFIX}-1"), None::<StartContainerOptions<String>>)
@@ -745,7 +745,7 @@ async fn test_solana_subscriptions() {
                         }
 
                         // shutdown subscription 2
-                        if step == 25 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 8 && new_state == RunState::RoundWitness.to_string(){
                             println!("stop container {NGINX_PROXY_PREFIX}-2");
                             docker
                                 .stop_container(&format!("{NGINX_PROXY_PREFIX}-2"), None)
@@ -754,7 +754,7 @@ async fn test_solana_subscriptions() {
 
                         }
                         // resume subscription 2
-                        if step == 30 && new_state == RunState::RoundWitness.to_string(){
+                        if step == 10 && new_state == RunState::RoundWitness.to_string(){
                             println!("resume container {NGINX_PROXY_PREFIX}-2");
 
                             docker
