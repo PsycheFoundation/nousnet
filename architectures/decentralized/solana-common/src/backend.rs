@@ -34,13 +34,14 @@ use tokio::{
 };
 use tracing::{error, info, trace, warn};
 
+type ProgramCoordinator = Arc<Program<Arc<Keypair>>>;
 const RPC_RETRY_ATTEMPTS: usize = 3;
 const RPC_INITIAL_BACKOFF_MS: u64 = 500;
 const RPC_MAX_BACKOFF_MS: u64 = 10_000;
 
 #[derive(Clone)]
 pub struct SolanaBackend {
-    program_coordinators: Vec<Arc<Program<Arc<Keypair>>>>,
+    program_coordinators: Vec<ProgramCoordinator>,
     cluster: Cluster,
     backup_clusters: Vec<Cluster>,
     wallet: Arc<Keypair>,
@@ -468,20 +469,29 @@ impl SolanaBackend {
                 .rpc()
                 .get_minimum_balance_for_rent_exemption(space)
                 .await
+                .map_err(Into::into)
         })
         .await
     }
 
     pub async fn get_balance(&self, address: &Pubkey) -> Result<u64> {
         let address = *address;
-        self.rpc_with_fallback(|coord| async move { coord.rpc().get_balance(&address).await })
-            .await
+        self.rpc_with_fallback(|coord| async move {
+            coord.rpc().get_balance(&address).await.map_err(Into::into)
+        })
+        .await
     }
 
     pub async fn get_data(&self, address: &Pubkey) -> Result<Vec<u8>> {
         let address = *address;
-        self.rpc_with_fallback(|coord| async move { coord.rpc().get_account_data(&address).await })
-            .await
+        self.rpc_with_fallback(|coord| async move {
+            coord
+                .rpc()
+                .get_account_data(&address)
+                .await
+                .map_err(Into::into)
+        })
+        .await
     }
 
     pub async fn get_logs(&self, tx: &Signature) -> Result<Vec<String>> {
@@ -499,6 +509,7 @@ impl SolanaBackend {
                         },
                     )
                     .await
+                    .map_err(Into::into)
             })
             .await?;
         Ok(response
@@ -530,7 +541,7 @@ impl SolanaBackend {
                     for signer in signers.iter() {
                         request = request.signer(signer.clone());
                     }
-                    request.send().await
+                    request.send().await.map_err(Into::into)
                 }
             })
             .await?;
@@ -558,15 +569,12 @@ impl SolanaBackend {
         });
     }
 
-    /// Tries the operation against each RPC in order, with retries per RPC.
+    /// Tries the operation against each RPC in order, with max retries per RPC.
     /// Only falls back to the next RPC on retryable errors (network/timeout).
-    /// NonRetryable and Fatal errors are returned immediately — a different RPC
-    /// won't help with e.g. account-not-found or invalid transaction errors.
-    async fn rpc_with_fallback<T, E, F, Fut>(&self, f: F) -> Result<T>
+    async fn rpc_with_fallback<T, F, Fut>(&self, f: F) -> Result<T>
     where
-        E: Into<RetryError<ClientError>> + std::fmt::Display,
-        F: Fn(Arc<Program<Arc<Keypair>>>) -> Fut,
-        Fut: Future<Output = Result<T, E>>,
+        F: Fn(ProgramCoordinator) -> Fut,
+        Fut: Future<Output = Result<T, RetryError<ClientError>>>,
     {
         let mut last_error = None;
         for (i, coordinator) in self.program_coordinators.iter().enumerate() {
@@ -575,7 +583,7 @@ impl SolanaBackend {
                 "rpc_with_fallback",
                 || {
                     let coord = coordinator.clone();
-                    async { f(coord).await.map_err(Into::into) }
+                    f(coord)
                 },
                 RPC_INITIAL_BACKOFF_MS,
                 1.5,
