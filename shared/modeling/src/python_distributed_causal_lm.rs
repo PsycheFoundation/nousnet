@@ -387,12 +387,13 @@ impl PythonDistributedCausalLM {
                                 status
                             );
                             sidecars_alive.store(false, Ordering::Release);
-                            // Kill remaining sidecars before exiting
+                            // Kill remaining sidecars then abort. Using abort()
+                            // instead of exit() because exit() runs atexit handlers
+                            // which hang on NCCL/CUDA cleanup.
                             for child in children.iter_mut() {
                                 let _ = child.kill();
-                                let _ = child.wait();
                             }
-                            std::process::exit(1);
+                            std::process::abort();
                         }
                     }
                 }
