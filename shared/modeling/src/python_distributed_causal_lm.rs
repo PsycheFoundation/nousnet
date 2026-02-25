@@ -366,7 +366,9 @@ impl PythonDistributedCausalLM {
         let children = Arc::new(Mutex::new(children));
         let sidecars_alive = Arc::new(AtomicBool::new(true));
 
-        // Spawn a monitor thread that detects sidecar death
+        // Spawn a monitor thread that detects sidecar death and force-exits
+        // the process. NCCL collectives cannot be interrupted once in progress,
+        // so process::exit is the only way to avoid a multi-hour hang.
         {
             let children = children.clone();
             let sidecars_alive = sidecars_alive.clone();
@@ -379,12 +381,18 @@ impl PythonDistributedCausalLM {
                     for (i, child) in children.iter_mut().enumerate() {
                         if let Ok(Some(status)) = child.try_wait() {
                             error!(
-                                "Sidecar process (rank {}) exited with status: {}",
+                                "Sidecar process (rank {}) exited with status: {} — \
+                                 force-exiting to avoid NCCL hang",
                                 i + 1,
                                 status
                             );
                             sidecars_alive.store(false, Ordering::Release);
-                            return;
+                            // Kill remaining sidecars before exiting
+                            for child in children.iter_mut() {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            std::process::exit(1);
                         }
                     }
                 }
