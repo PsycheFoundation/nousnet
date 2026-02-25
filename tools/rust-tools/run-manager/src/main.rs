@@ -23,8 +23,9 @@ use commands::authorization::{
 };
 use commands::can_join::CommandCanJoin;
 use commands::run::{
-    CommandCheckpoint, CommandCloseRun, CommandCreateRun, CommandJsonDumpRun, CommandJsonDumpUser,
-    CommandSetFutureEpochRates, CommandSetPaused, CommandTick, CommandUpdateConfig,
+    CommandCheckpoint, CommandCloseRun, CommandCreateRun, CommandDownloadResults,
+    CommandJsonDumpRun, CommandJsonDumpUser, CommandSetFutureEpochRates, CommandSetPaused,
+    CommandTick, CommandUpdateConfig, CommandUploadData,
 };
 use commands::treasury::{CommandTreasurerClaimRewards, CommandTreasurerTopUpRewards};
 use run_manager::docker::coordinator_client::CoordinatorClient;
@@ -163,6 +164,22 @@ enum Commands {
         cluster: ClusterArgs,
         #[clap(flatten)]
         params: CommandJsonDumpUser,
+    },
+    DownloadResults {
+        #[clap(flatten)]
+        cluster: ClusterArgs,
+        #[clap(flatten)]
+        wallet: WalletArgs,
+        #[clap(flatten)]
+        params: CommandDownloadResults,
+    },
+    UploadData {
+        #[clap(flatten)]
+        cluster: ClusterArgs,
+        #[clap(flatten)]
+        wallet: WalletArgs,
+        #[clap(flatten)]
+        params: CommandUploadData,
     },
 
     // Authorization commands
@@ -407,6 +424,16 @@ async fn async_main() -> Result<()> {
             coordinator_program_id,
             authorizer,
         } => list_runs(env_file, cluster, coordinator_program_id, authorizer),
+        Commands::DownloadResults {
+            cluster,
+            wallet,
+            params,
+        } => params.execute(create_backend(cluster, wallet)?).await,
+        Commands::UploadData {
+            cluster,
+            wallet,
+            params,
+        } => params.execute(create_backend(cluster, wallet)?).await,
         Commands::PrintAllHelp { markdown } => {
             assert!(markdown);
             clap_markdown::print_help_markdown::<CliArgs>();
