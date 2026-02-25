@@ -111,6 +111,8 @@ impl PythonDistributedTrainer {
         );
         comm.set(&iteration.to_string(), &hyperparameters.to_string())?;
 
+        model.check_sidecars_alive();
+
         // barrier to ensure everyone has seen the broadcast
         let dummy = Tensor::zeros([], (Kind::Float, device));
         comm.all_reduce(&dummy, ReduceType::Sum)?;
@@ -209,13 +211,18 @@ impl PythonDistributedTrainer {
         self.comm
             .set(&iteration.to_string(), &operation.to_string())?;
 
+        self.model.check_sidecars_alive();
+
         // barrier to ensure everyone has seen the broadcast
         let dummy = Tensor::zeros([], (Kind::Float, self.device));
         self.comm.all_reduce(&dummy, ReduceType::Sum)?;
 
         if results_len > 0 {
+            self.model.check_sidecars_alive();
             self.broadcast_distro_results(prev_self_distro_results.as_ref().unwrap())?;
         }
+
+        self.model.check_sidecars_alive();
 
         self.comm.broadcast(&batch_data.input_ids)?;
         if let Some(labels) = &batch_data.labels {
@@ -236,6 +243,8 @@ impl PythonDistributedTrainer {
         )?;
 
         // reduce the loss across all shards
+        self.model.check_sidecars_alive();
+
         let loss = Tensor::from_slice(&[ret.loss])
             .to_kind(Kind::Float)
             .to_device(self.device);
@@ -295,11 +304,14 @@ impl PythonDistributedTrainer {
         self.comm
             .set(&iteration.to_string(), &operation.to_string())?;
 
+        self.model.check_sidecars_alive();
+
         // barrier to ensure everyone has seen the broadcast
         let dummy = Tensor::zeros([], (Kind::Float, self.device));
         self.comm.all_reduce(&dummy, ReduceType::Sum)?;
 
         if results_len > 0 {
+            self.model.check_sidecars_alive();
             self.broadcast_distro_results(distro_results.as_ref().unwrap())?;
         }
 
@@ -328,6 +340,8 @@ impl PythonDistributedTrainer {
 
         self.comm
             .set(&iteration.to_string(), &operation.to_string())?;
+
+        self.model.check_sidecars_alive();
 
         // barrier to ensure everyone has seen the broadcast
         let dummy = Tensor::zeros([], (Kind::Float, self.device));
