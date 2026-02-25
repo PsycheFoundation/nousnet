@@ -23,7 +23,7 @@ pub use p2p_model_sharing::{
     PeerManagerHandle,
 };
 use psyche_metrics::{ClientMetrics, PeerConnection};
-use router::{SupportedProtocols, spawn_router_with_allowlist};
+use router::{SupportedProtocols, spawn_router};
 use state::State;
 use std::str::FromStr;
 use std::{
@@ -98,6 +98,7 @@ pub use tui::{NetworkTUIState, NetworkTui};
 use url::Url;
 pub use util::fmt_bytes;
 
+use crate::allowlist::AllowlistHook;
 use crate::p2p_model_sharing::ModelSharing;
 
 const USE_RELAY_HOSTNAME: &str = "use1-1.relay.nousresearch.psyche.iroh.link";
@@ -335,6 +336,8 @@ where
 
         let connection_monitor = ConnectionMonitor::default();
 
+        let allowlist_hook = AllowlistHook::new(allowlist.clone());
+
         let endpoint = {
             let transport_config = QuicTransportConfig::builder()
                 .max_idle_timeout(Some(Duration::from_secs(10).try_into()?))
@@ -355,6 +358,7 @@ where
                 .transport_config(transport_config)
                 .bind_addr(SocketAddrV4::new(ipv4, port.unwrap_or(0)))?
                 .clear_address_lookup()
+                .hooks(allowlist_hook.clone())
                 .hooks(connection_monitor.clone());
 
             let endpoint = match discovery_mode {
@@ -462,8 +466,7 @@ where
 
         trace!("creating router...");
         let blobs_protocol = BlobsProtocol::new(&store.clone(), None);
-        let router = spawn_router_with_allowlist(
-            allowlist.clone(),
+        let router = spawn_router(
             endpoint.clone(),
             SupportedProtocols::new(gossip.clone(), blobs_protocol, model_parameter_sharing),
             additional_protocol,
