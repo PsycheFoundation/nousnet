@@ -12,7 +12,7 @@ use std::{
     process::{Child, Command},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -213,7 +213,6 @@ pub struct PythonDistributedCausalLM {
     iteration: Arc<AtomicUsize>,
     pub(crate) parallelism: ParallelismConfig,
     children: Arc<Mutex<Vec<Child>>>,
-    sidecars_alive: Arc<AtomicBool>,
 }
 
 unsafe impl Send for PythonDistributedCausalLM {}
@@ -364,14 +363,11 @@ impl PythonDistributedCausalLM {
             .collect();
         let children = children?;
         let children = Arc::new(Mutex::new(children));
-        let sidecars_alive = Arc::new(AtomicBool::new(true));
 
-        // Spawn a monitor thread that detects sidecar death and force-exits
-        // the process. NCCL collectives cannot be interrupted once in progress,
-        // so process::exit is the only way to avoid a multi-hour hang.
+        // Monitor thread that polls the children sidecars to ensure they are still alive
+        // If any of them exit, we kill all the children and abort the process to avoid NCCL hangs
         {
             let children = children.clone();
-            let sidecars_alive = sidecars_alive.clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
@@ -382,17 +378,14 @@ impl PythonDistributedCausalLM {
                         if let Ok(Some(status)) = child.try_wait() {
                             error!(
                                 "Sidecar process (rank {}) exited with status: {} — \
-                                 force-exiting to avoid NCCL hang",
+                             force-aborting to avoid NCCL hang",
                                 i + 1,
                                 status
                             );
-                            sidecars_alive.store(false, Ordering::Release);
-                            // Kill remaining sidecars then abort. Using abort()
-                            // instead of exit() because exit() runs atexit handlers
-                            // which hang on NCCL/CUDA cleanup.
                             for child in children.iter_mut() {
                                 let _ = child.kill();
                             }
+                            // abort() here because exit() seems to also hang in some ocassions
                             std::process::abort();
                         }
                     }
@@ -407,24 +400,12 @@ impl PythonDistributedCausalLM {
             local: local.into(),
             parallelism,
             children,
-            sidecars_alive,
             iteration: Arc::new(AtomicUsize::new(0)),
         })
     }
 
     pub fn iteration(&self) -> Arc<AtomicUsize> {
         self.iteration.clone()
-    }
-
-    /// Panics if any sidecar process has died, preventing an infinite hang
-    /// on NCCL collective operations.
-    pub fn check_sidecars_alive(&self) {
-        if !self.sidecars_alive.load(Ordering::Acquire) {
-            panic!(
-                "One or more sidecar processes have died — aborting to prevent \
-                 an infinite hang on NCCL collective operations"
-            );
-        }
     }
 
     fn kill_children(&self) {
@@ -511,12 +492,8 @@ impl CausalLM for PythonDistributedCausalLM {
             .set(&iteration.to_string(), &operation.to_string())
             .unwrap();
 
-        self.check_sidecars_alive();
-
         // barrier to ensure everyone has seen the broadcast
         self.comm.barrier(Some(self.device())).unwrap();
-
-        self.check_sidecars_alive();
 
         self.comm.broadcast(&batch_data.input_ids).unwrap();
         if let Some(labels) = &batch_data.labels {
@@ -573,12 +550,6 @@ impl CausalLM for PythonDistributedCausalLM {
     }
 
     fn shutdown(&self) {
-        if !self.sidecars_alive.load(Ordering::Acquire) {
-            error!("Sidecars already dead, skipping graceful shutdown");
-            self.kill_children();
-            return;
-        }
-
         let operation = serde_json::json!({
             "operation": "exit",
         });
