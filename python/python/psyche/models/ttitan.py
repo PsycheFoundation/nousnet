@@ -427,6 +427,16 @@ class TorchtitanAuto(CausalLM):
                         labels = labels.narrow(0, start_row, shard_size)
                     if position_ids is not None:
                         position_ids = position_ids.narrow(0, start_row, shard_size)
+        if (
+            position_ids is not None
+            and self.parallel_dims.tp > 1
+            and not isinstance(position_ids, DTensor)
+        ):
+            tp_mesh = self.parallel_dims.world_mesh["tp"]
+            position_ids = distribute_tensor(
+                position_ids, device_mesh=tp_mesh, placements=[Replicate()]
+            )
+
         try:
             with self.amp, torch.cuda.device(input_ids.device.index):
                 pred = self.model(
