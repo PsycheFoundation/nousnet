@@ -221,6 +221,13 @@ async fn test_client_join_and_get_model_p2p(#[values(1, 2)] n_new_clients: u8) {
                 ],
             )
             .unwrap();
+        // When spawning multiple clients, stagger them to avoid P2P download
+        // contention. This gives the previous client time to download the model
+        // and become an additional peer source for subsequent clients.
+        if i < n_new_clients {
+            println!("Waiting before spawning next client to reduce P2P contention");
+            tokio::time::sleep(Duration::from_secs(90)).await;
+        }
     }
 
     let mut liveness_check_interval = time::interval(Duration::from_secs(10));
