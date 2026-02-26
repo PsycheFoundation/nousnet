@@ -346,7 +346,11 @@ async fn disconnect_client() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // Initialize a Solana run with 3 clients
-    let _cleanup = e2e_testing_setup(docker.clone(), 3).await;
+    // Use warmup_time=150 to give all 3 clients enough time to load model on CI
+    let config = ConfigBuilder::new()
+        .with_num_clients(3)
+        .with_warmup_time(150);
+    let _cleanup = e2e_testing_setup_with_config(docker.clone(), 3, config, None).await;
 
     let _monitor_client_1 = watcher
         .monitor_container(
@@ -407,6 +411,17 @@ async fn disconnect_client() {
                 if step == 20 {
                     println!("Max number of epochs reached for test");
                     break;
+                }
+
+                // Safety: if we've moved past epoch 0 without killing a client,
+                // the test can't proceed (not enough clients for min_clients).
+                // Fail fast rather than hanging.
+                if epoch > 0 && !killed_client {
+                    panic!(
+                        "Epoch advanced to {} without kill happening. Only {} clients confirmed training (needed 3). Test infrastructure issue.",
+                        epoch,
+                        clients_confirmed_training.len()
+                    );
                 }
 
                 if old_state == RunState::WaitingForMembers.to_string() {
