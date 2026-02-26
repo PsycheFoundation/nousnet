@@ -1,7 +1,7 @@
 [config]
 warmup_time = 100
 cooldown_time = 5
-epoch_time = 180
+epoch_time = 150
 max_round_train_time = 30
 round_witness_time = 5
 min_clients = 1
