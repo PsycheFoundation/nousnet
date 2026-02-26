@@ -12,7 +12,7 @@ use std::{
     process::{Child, Command},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -213,6 +213,7 @@ pub struct PythonDistributedCausalLM {
     iteration: Arc<AtomicUsize>,
     pub(crate) parallelism: ParallelismConfig,
     children: Arc<Mutex<Vec<Child>>>,
+    shutting_down: Arc<AtomicBool>,
 }
 
 unsafe impl Send for PythonDistributedCausalLM {}
@@ -363,14 +364,19 @@ impl PythonDistributedCausalLM {
             .collect();
         let children = children?;
         let children = Arc::new(Mutex::new(children));
+        let shutting_down = Arc::new(AtomicBool::new(false));
 
-        // Monitor thread that polls the children sidecars to ensure they are still alive
-        // If any of them exit, we kill all the children and abort the process to avoid NCCL hangs
+        // Monitor thread that polls the children sidecars to ensure they are still alive.
+        // If any of them exit unexpectedly, we kill all children and abort to avoid NCCL hangs.
         {
             let children = children.clone();
+            let shutting_down = shutting_down.clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
+                    if shutting_down.load(Ordering::Acquire) {
+                        return; // Avoid calling abort() on clean shutdown, just exit the loop
+                    }
                     let Ok(mut children) = children.lock() else {
                         return;
                     };
@@ -385,7 +391,7 @@ impl PythonDistributedCausalLM {
                             for child in children.iter_mut() {
                                 let _ = child.kill();
                             }
-                            // abort() here because exit() seems to also hang in some ocassions
+                            // abort() because exit() hangs on NCCL/CUDA atexit handlers
                             std::process::abort();
                         }
                     }
@@ -400,6 +406,7 @@ impl PythonDistributedCausalLM {
             local: local.into(),
             parallelism,
             children,
+            shutting_down,
             iteration: Arc::new(AtomicUsize::new(0)),
         })
     }
@@ -550,6 +557,8 @@ impl CausalLM for PythonDistributedCausalLM {
     }
 
     fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+
         let operation = serde_json::json!({
             "operation": "exit",
         });
@@ -575,6 +584,7 @@ impl CausalLM for PythonDistributedCausalLM {
 
 impl Drop for PythonDistributedCausalLM {
     fn drop(&mut self) {
+        self.shutting_down.store(true, Ordering::Release);
         self.kill_children();
     }
 }
