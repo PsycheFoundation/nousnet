@@ -500,48 +500,70 @@ async fn drop_a_client_waitingformembers_then_reconnect() {
         )
         .unwrap();
 
+    let mut liveness_check_interval = time::interval(Duration::from_secs(10));
+    let mut last_event_time = tokio::time::Instant::now();
+    let timeout_duration = Duration::from_secs(EPOCH_EVENT_TIMEOUT_SECS);
+    let client_names: Vec<String> = (1..=n_clients as u8)
+        .map(|i| format!("{CLIENT_CONTAINER_PREFIX}-{i}"))
+        .collect();
+
     let mut train_reached = false;
-    while let Some(response) = watcher.log_rx.recv().await {
-        match response {
-            Response::StateChange(_timestamp, client, old_state, new_state, _epoch, _step) => {
-                let coordinator_state = solana_client.get_run_state().await;
-                println!("state change client {client} - {old_state}=>{new_state}");
-
-                // Once warmup starts, kill client 2's container
-                if new_state == RunState::RoundTrain.to_string() && !train_reached {
-                    println!(
-                        "Train started, killing container {}...",
-                        &format!("{CLIENT_CONTAINER_PREFIX}-2")
-                    );
-
-                    let options = Some(KillContainerOptions { signal: "SIGKILL" });
-                    docker
-                        .kill_container(&format!("{CLIENT_CONTAINER_PREFIX}-2"), options)
-                        .await
-                        .unwrap();
-
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    train_reached = true;
+    loop {
+        tokio::select! {
+            _ = liveness_check_interval.tick() => {
+                if last_event_time.elapsed() > timeout_duration {
+                    watcher.panic_timeout(&solana_client, &client_names).await;
                 }
-
-                // After killing client, verify we get stuck in WaitingForMembers
-                if train_reached && coordinator_state == RunState::WaitingForMembers {
-                    println!("WaitingForMembers seen");
+            }
+            response = watcher.log_rx.recv() => {
+                last_event_time = tokio::time::Instant::now();
+                let Some(response) = response else {
+                    println!("Log channel closed");
                     break;
-                }
-            }
-            Response::Loss(client, epoch, step, loss) => {
-                println!("client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}");
+                };
 
-                if epoch as i64 > current_epoch {
-                    current_epoch = epoch as i64;
-                    if epoch == num_of_epochs_to_run {
-                        println!("Epoch {epoch} reached. Stopping");
-                        break;
+                match response {
+                    Response::StateChange(_timestamp, client, old_state, new_state, _epoch, _step) => {
+                        let coordinator_state = solana_client.get_run_state().await;
+                        println!("state change client {client} - {old_state}=>{new_state}");
+
+                        // Once warmup starts, kill client 2's container
+                        if new_state == RunState::RoundTrain.to_string() && !train_reached {
+                            println!(
+                                "Train started, killing container {}...",
+                                &format!("{CLIENT_CONTAINER_PREFIX}-2")
+                            );
+
+                            let options = Some(KillContainerOptions { signal: "SIGKILL" });
+                            docker
+                                .kill_container(&format!("{CLIENT_CONTAINER_PREFIX}-2"), options)
+                                .await
+                                .unwrap();
+
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            train_reached = true;
+                        }
+
+                        // After killing client, verify we get stuck in WaitingForMembers
+                        if train_reached && coordinator_state == RunState::WaitingForMembers {
+                            println!("WaitingForMembers seen");
+                            break;
+                        }
                     }
+                    Response::Loss(client, epoch, step, loss) => {
+                        println!("client: {client:?}, epoch: {epoch}, step: {step}, Loss: {loss:?}");
+
+                        if epoch as i64 > current_epoch {
+                            current_epoch = epoch as i64;
+                            if epoch == num_of_epochs_to_run {
+                                println!("Epoch {epoch} reached. Stopping");
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 
