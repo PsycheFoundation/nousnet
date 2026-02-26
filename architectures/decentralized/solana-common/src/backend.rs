@@ -464,19 +464,22 @@ impl SolanaBackend {
     }
 
     pub async fn get_minimum_balance_for_rent_exemption(&self, space: usize) -> Result<u64> {
-        self.rpc_with_fallback(|coord| async move {
-            coord
-                .rpc()
-                .get_minimum_balance_for_rent_exemption(space)
-                .await
-                .map_err(Into::into)
-        })
+        self.rpc_with_fallback(
+            "get_minimum_balance_for_rent_exemption",
+            |coord| async move {
+                coord
+                    .rpc()
+                    .get_minimum_balance_for_rent_exemption(space)
+                    .await
+                    .map_err(Into::into)
+            },
+        )
         .await
     }
 
     pub async fn get_balance(&self, address: &Pubkey) -> Result<u64> {
         let address = *address;
-        self.rpc_with_fallback(|coord| async move {
+        self.rpc_with_fallback("get_balance", |coord| async move {
             coord.rpc().get_balance(&address).await.map_err(Into::into)
         })
         .await
@@ -484,7 +487,7 @@ impl SolanaBackend {
 
     pub async fn get_data(&self, address: &Pubkey) -> Result<Vec<u8>> {
         let address = *address;
-        self.rpc_with_fallback(|coord| async move {
+        self.rpc_with_fallback("get_data", |coord| async move {
             coord
                 .rpc()
                 .get_account_data(&address)
@@ -497,7 +500,7 @@ impl SolanaBackend {
     pub async fn get_logs(&self, tx: &Signature) -> Result<Vec<String>> {
         let tx_sig = *tx;
         let response = self
-            .rpc_with_fallback(|coord| async move {
+            .rpc_with_fallback("get_logs", |coord| async move {
                 coord
                     .rpc()
                     .get_transaction_with_config(
@@ -530,7 +533,7 @@ impl SolanaBackend {
         let instructions: Arc<[Instruction]> = instructions.to_vec().into();
         let signers: Arc<[Arc<Keypair>]> = signers.to_vec().into();
         let signature = self
-            .rpc_with_fallback(|coord| {
+            .rpc_with_fallback(name, |coord| {
                 let instructions = instructions.clone();
                 let signers = signers.clone();
                 async move {
@@ -571,7 +574,7 @@ impl SolanaBackend {
 
     /// Tries the operation against each RPC in order, with max retries per RPC.
     /// Only falls back to the next RPC on retryable errors (network/timeout).
-    async fn rpc_with_fallback<T, F, Fut>(&self, f: F) -> Result<T>
+    async fn rpc_with_fallback<T, F, Fut>(&self, name: &str, f: F) -> Result<T>
     where
         F: Fn(ProgramCoordinator) -> Fut,
         Fut: Future<Output = Result<T, RetryError<ClientError>>>,
@@ -580,7 +583,7 @@ impl SolanaBackend {
         for (i, coordinator) in self.program_coordinators.iter().enumerate() {
             let coordinator = coordinator.clone();
             let result = retry_function_with_params(
-                "rpc_with_fallback",
+                name,
                 || {
                     let coord = coordinator.clone();
                     f(coord)
