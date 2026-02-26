@@ -195,6 +195,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                 }
                                 broadcasts.retain(|(_, step)| *step >= last_needed_step_blobs);
                                 sharable_model.clear_cache(); // IMPORTANT -- any cached blobs are now invalid
+                                p2p.clear_bandwidth_tracking();
                             }
 
                             run.apply_state(*new_state).await?;

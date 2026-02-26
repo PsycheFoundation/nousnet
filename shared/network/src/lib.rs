@@ -806,6 +806,11 @@ where
         }
         None
     }
+
+    pub fn clear_bandwidth_tracking(&mut self) {
+        self.state.bandwidth_tracker.clear();
+    }
+
     pub fn connection_monitor(&self) -> ConnectionMonitor {
         self.connection_monitor.clone()
     }
