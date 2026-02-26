@@ -634,26 +634,14 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> StepStateMachine<T, 
                             // first received payload for this batch id, vote for it in consensus
                             broadcast_bloom.add(&commitment.data_hash);
                             trace!("Adding batch {batch_id} to broadcast bloom");
-                            event!(
-                                train::DistroResultAddedToConsensus(Ok(())),
-                                Tags {
-                                    batch_ids: vec![batch_id],
-                                    blob: hash
-                                }
-                            );
+                            event!(train::DistroResultAddedToConsensus(Ok(())));
                         } else {
                             trace!(
                                 "Don't have {batch_id} in our remaining batch IDs {remaining_batch_ids:?}, discarding",
                             );
-                            event!(
-                                train::DistroResultAddedToConsensus(Err(format!(
-                                    "batch {batch_id} not in remaining batch IDs"
-                                ))),
-                                Tags {
-                                    batch_ids: vec![batch_id],
-                                    blob: hash
-                                }
-                            );
+                            event!(train::DistroResultAddedToConsensus(Err(format!(
+                                "batch {batch_id} not in remaining batch IDs"
+                            ))));
                         }
                     } else {
                         trace!("Already submitted witness, not adding {from} to participant bloom");
@@ -675,13 +663,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> StepStateMachine<T, 
             }
 
             // we unconditionally store every seen payload, since we're not yet sure what consensus will be on whether it's included.
-            event!(
-                train::DistroResultDeserializeStarted,
-                Tags {
-                    batch_ids: vec![batch_id],
-                    blob: hash
-                }
-            );
+            event!(train::DistroResultDeserializeStarted { blob: hash });
             let deserializing = tokio::task::spawn(async move {
                 let maybe_results = tokio::task::spawn_blocking(move || {
                     let r = distro_result
@@ -697,15 +679,10 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> StepStateMachine<T, 
                         hash,
                         batch_id
                     );
-                    event!(
-                        train::DistroResultDeserializeComplete(
-                            r.as_ref().map(|_| ()).map_err(|e| e.to_string())
-                        ),
-                        Tags {
-                            batch_ids: vec![batch_id],
-                            blob: hash
-                        }
-                    );
+                    event!(train::DistroResultDeserializeComplete {
+                        blob: hash,
+                        result: r.as_ref().map(|_| ()).map_err(|e| e.to_string()),
+                    });
                     r
                 })
                 .await
@@ -828,11 +805,6 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> StepStateMachine<T, 
                     .lock()
                     .map_err(|_| StepError::StatsLoggerMutex)?
                     .push_round_stats(&round_losses, round_duration, step_duration, optim_stats);
-
-                event!(train::TrainingFinished {
-                    step: state.progress.step as u64,
-                    loss: loss.map(|l| l as f64),
-                });
 
                 info!(
                     client_id = %self.identity,

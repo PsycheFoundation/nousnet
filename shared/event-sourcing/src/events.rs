@@ -14,20 +14,9 @@ pub enum SubscriptionStatus {
     Down,
 }
 
-/// Tags link an event to the broader operation it belongs to.
-/// Each field is `None` when the event is not part of that operation.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Tags {
-    pub operation_id: Option<u64>,
-    pub model_parameter: Option<String>,
-    pub batch_ids: Option<Vec<BatchId>>,
-    pub blob: Option<BlobHash>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub timestamp: DateTime<Utc>,
-    pub tags: Tags,
     pub data: EventData,
 }
 
@@ -140,19 +129,25 @@ pub enum P2P {
         endpoint_id: EndpointId,
         latency_ms: u64,
     },
-    #[display("gossip neighbors changed")]
-    GossipNeighborsChanged {
-        removed_neighbors: Vec<EndpointId>,
-        new_neighbors: Vec<EndpointId>,
-    },
-    #[display("gossip sent: {message_type}")]
-    GossipMessageSent { message_type: String },
-    #[display("gossip received: {message_type}")]
-    GossipMessageReceived { message_type: String },
+    #[display("gossip neighbor up: {endpoint_id}")]
+    GossipNeighborUp { endpoint_id: EndpointId },
+    #[display("gossip neighbor down: {endpoint_id}")]
+    GossipNeighborDown { endpoint_id: EndpointId },
+    #[display("gossip sent: training result")]
+    GossipTrainingResultSent,
+    #[display("gossip sent: finished")]
+    GossipFinishedSent,
+    #[display("gossip received: training result {blob} batch={batch_id}")]
+    GossipTrainingResultReceived { blob: BlobHash, batch_id: BatchId },
+    #[display("gossip received: finished")]
+    GossipFinishedReceived,
     #[display("gossip lagged")]
     GossipLagged,
-    #[display("blob made available for upload")]
-    BlobAddedToStore,
+    #[display("blob made available for upload: {blob}")]
+    BlobAddedToStore {
+        blob: BlobHash,
+        model_parameter: String,
+    },
     #[display("blob upload started: {size_bytes}B")]
     BlobUploadStarted {
         to_endpoint_id: EndpointId,
@@ -163,14 +158,28 @@ pub enum P2P {
     #[display("blob upload completed")]
     BlobUploadCompleted(Result<(), String>),
 
-    #[display("blob download requested")]
-    BlobDownloadRequested,
-    #[display("blob download started: {size_bytes}B")]
-    BlobDownloadStarted { size_bytes: u64 },
-    #[display("blob download progress: {bytes_transferred}B")]
-    BlobDownloadProgress { bytes_transferred: u64 },
-    #[display("blob download completed: success={success}")]
+    #[display("blob download requested: {blob}")]
+    BlobDownloadRequested { blob: BlobHash },
+    #[display("blob download trying provider: {blob} {endpoint_id}")]
+    BlobDownloadTryProvider {
+        blob: BlobHash,
+        endpoint_id: EndpointId,
+    },
+    #[display("blob download provider failed: {blob} {endpoint_id}")]
+    BlobDownloadProviderFailed {
+        blob: BlobHash,
+        endpoint_id: EndpointId,
+    },
+    #[display("blob download started: {blob} {size_bytes}B")]
+    BlobDownloadStarted { blob: BlobHash, size_bytes: u64 },
+    #[display("blob download progress: {blob} {bytes_transferred}B")]
+    BlobDownloadProgress {
+        blob: BlobHash,
+        bytes_transferred: u64,
+    },
+    #[display("blob download completed: {blob} success={success}")]
     BlobDownloadCompleted {
+        blob: BlobHash,
         success: bool,
         error_string: Option<String>,
     },
@@ -183,19 +192,26 @@ pub enum P2P {
 )]
 #[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum Train {
-    #[display("batches assigned: {num_batches}")]
-    BatchesAssigned { num_batches: u32 },
+    #[display("batch assigned: {batch_id}")]
+    BatchAssigned { batch_id: BatchId },
     #[display("batch data download start")]
     BatchDataDownloadStart,
     #[display("batch data download finished: success={}", result.is_ok())]
     BatchDataDownloadComplete { result: Result<(), ()> },
 
-    #[display("training started")]
-    TrainingStarted,
-    #[display("training finished: step={step} loss={loss:?}")]
-    TrainingFinished { step: u64, loss: Option<f64> },
-    #[display("WARNING: untrained batch")]
-    UntrainedBatchWarning { expected_trainer: Option<String> },
+    #[display("training started: {batch_id}")]
+    TrainingStarted { batch_id: BatchId },
+    #[display("training finished: {batch_id} step={step} loss={loss:?}")]
+    TrainingFinished {
+        batch_id: BatchId,
+        step: u64,
+        loss: Option<f64>,
+    },
+    #[display("WARNING: untrained batch {batch_id}")]
+    UntrainedBatchWarning {
+        batch_id: BatchId,
+        expected_trainer: Option<String>,
+    },
     #[display("witness elected: step={step} round={round} epoch={epoch}")]
     WitnessElected {
         step: u64,
@@ -205,10 +221,13 @@ pub enum Train {
         committee_position: u64,
     },
 
-    #[display("distro result deserialize started")]
-    DistroResultDeserializeStarted,
-    #[display("distro result deserialize complete")]
-    DistroResultDeserializeComplete(Result<(), String>),
+    #[display("distro result deserialize started: {blob}")]
+    DistroResultDeserializeStarted { blob: BlobHash },
+    #[display("distro result deserialize complete: {blob}")]
+    DistroResultDeserializeComplete {
+        blob: BlobHash,
+        result: Result<(), String>,
+    },
     #[display("apply distro results start")]
     ApplyDistroResultsStart,
     #[display("apply distro results complete")]

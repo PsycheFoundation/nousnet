@@ -568,7 +568,7 @@ where
         self.download_manager
             .add(ticket, tag.clone(), rx, download_type.clone());
         debug!(name: "blob_download_start", hash = %ticket_hash.fmt_short(), "started downloading blob {}", ticket_hash);
-        event!(p2p::BlobDownloadRequested, Tags { blob: ticket_hash });
+        event!(p2p::BlobDownloadRequested { blob: ticket_hash });
         let latency_sorted = LatencySorted::new(
             std::iter::once(provider_endpoint_id.id)
                 .chain(additional_peers_to_try.iter().cloned())
@@ -719,7 +719,7 @@ where
             update = self.download_manager.poll_next() => {
                 match update {
                     Some(DownloadManagerEvent::Complete(result)) => {
-                        event!(p2p::BlobDownloadCompleted { success: true, error_string: None }, Tags { blob: result.hash });
+                        event!(p2p::BlobDownloadCompleted { blob: result.hash, success: true, error_string: None });
                         Ok(Some(NetworkEvent::DownloadComplete(result)))
                     }
                     Some(DownloadManagerEvent::Update(update)) => {
@@ -730,7 +730,7 @@ where
                         let hash = result.blob_ticket.hash();
                         let err_string = result.error.to_string();
                         self.state.download_progesses.remove(&hash);
-                        event!(p2p::BlobDownloadCompleted { success: false, error_string: Some(err_string) }, Tags { blob: hash });
+                        event!(p2p::BlobDownloadCompleted { blob: hash, success: false, error_string: Some(err_string) });
                         Ok(Some(NetworkEvent::DownloadFailed(result)))
                     }
                     None => Ok(None),
@@ -770,19 +770,15 @@ where
         // mid-download.
         if !update.all_done {
             if !self.state.download_progesses.contains_key(&hash) {
-                event!(
-                    p2p::BlobDownloadStarted {
-                        size_bytes: update.total_size
-                    },
-                    Tags { blob: hash }
-                );
+                event!(p2p::BlobDownloadStarted {
+                    blob: hash,
+                    size_bytes: update.total_size
+                });
             }
-            event!(
-                p2p::BlobDownloadProgress {
-                    bytes_transferred: update.downloaded_size
-                },
-                Tags { blob: hash }
-            );
+            event!(p2p::BlobDownloadProgress {
+                blob: hash,
+                bytes_transferred: update.downloaded_size
+            });
         }
 
         if update.all_done {
@@ -881,19 +877,13 @@ fn parse_gossip_event<BroadcastMessage: Networkable>(
             let peers: Vec<_> = gossip.neighbors().collect();
             debug!(name: "gossip_new_peer", endpoint_id=%endpoint_id, all_gossip_peers = ?peers, "gossip connected to new peer {endpoint_id}, we now have {} peers", peers.len());
             metrics.update_p2p_gossip_neighbors(&peers);
-            event!(p2p::GossipNeighborsChanged {
-                new_neighbors: vec![endpoint_id],
-                removed_neighbors: vec![]
-            });
+            event!(p2p::GossipNeighborUp { endpoint_id });
         }
         Ok(iroh_gossip::api::Event::NeighborDown(endpoint_id)) => {
             let peers: Vec<_> = gossip.neighbors().collect();
             debug!(name: "gossip_lost_peer", endpoint_id=%endpoint_id, all_gossip_peers = ?peers, "gossip disconnected from peer {endpoint_id}, we now have {} peers", peers.len());
             metrics.update_p2p_gossip_neighbors(&peers);
-            event!(p2p::GossipNeighborsChanged {
-                new_neighbors: vec![],
-                removed_neighbors: vec![endpoint_id]
-            });
+            event!(p2p::GossipNeighborDown { endpoint_id })
         }
         Ok(iroh_gossip::api::Event::Lagged) => {
             error!(name: "gossip_lagged","Gossip lagged. We missed some events.");

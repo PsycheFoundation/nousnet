@@ -1,22 +1,13 @@
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use iroh::EndpointId;
+use iroh_blobs::Hash as BlobHash;
 use psyche_coordinator::{RunState, model::Checkpoint};
 use psyche_core::BatchId;
 use psyche_metrics::SelectedPath;
 use std::collections::{BTreeMap, HashSet};
 
 use crate::events::{Client, Cooldown, Event, EventData, P2P, ResourceSnapshot, Train, Warmup};
-
-// ── Tag helpers ───────────────────────────────────────────────────────────────
-
-fn operation_id(event: &Event) -> Option<u64> {
-    event.tags.operation_id
-}
-
-fn batch_id_tags(event: &Event) -> impl Iterator<Item = &BatchId> {
-    event.tags.batch_ids.iter().flatten()
-}
 
 // ── Coordinator ───────────────────────────────────────────────────────────────
 
@@ -76,9 +67,17 @@ pub struct PeerInfo {
 }
 
 #[derive(Debug, Clone)]
-pub struct BlobTransfer {
-    /// Endpoint we're uploading to / downloading from.
+pub struct BlobUploadTransfer {
+    /// Endpoint we're uploading to.
     pub peer_endpoint_id: EndpointId,
+    pub size_bytes: u64,
+    pub bytes_transferred: u64,
+    /// None = in progress, Some(Ok(())) = success, Some(Err(s)) = failed.
+    pub result: Option<Result<(), String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BlobDownloadTransfer {
     pub size_bytes: u64,
     pub bytes_transferred: u64,
     /// None = in progress, Some(Ok(())) = success, Some(Err(s)) = failed.
@@ -91,10 +90,10 @@ pub struct P2PSnapshot {
     pub peers: IndexMap<EndpointId, PeerInfo>,
     /// Current gossip neighbourhood.
     pub gossip_neighbors: HashSet<EndpointId>,
-    /// Blob uploads keyed by BlobUpload tag id.
-    pub uploads: IndexMap<u64, BlobTransfer>,
-    /// Blob downloads keyed by BlobDownload tag id.
-    pub downloads: IndexMap<u64, BlobTransfer>,
+    /// Blob uploads keyed by blob hash.
+    pub uploads: IndexMap<BlobHash, BlobUploadTransfer>,
+    /// Blob downloads keyed by blob hash.
+    pub downloads: IndexMap<BlobHash, BlobDownloadTransfer>,
     /// Total number of blobs ever added to local iroh store.
     pub blobs_in_store: usize,
     /// Total gossip messages sent this session.
@@ -123,14 +122,11 @@ pub struct TrainSnapshot {
     /// Number of batches assigned to this node for the current step.
     pub batches_assigned: u64,
     /// Per-batch download status for batches we're responsible for.
-    /// Keyed by BatchId from Tag::BatchId on the event.
     pub batch_downloads: IndexMap<BatchId, BatchDownload>,
     /// True between TrainingStarted and TrainingFinished.
     pub training_in_progress: bool,
     /// Our witness election info for this step, if we were elected.
     pub witness: Option<WitnessInfo>,
-    /// Batch IDs from the most recent ApplyDistroResultsStart (consensus).
-    pub last_distro_batch_ids: HashSet<BatchId>,
     /// Whether the most recent DistroResult apply succeeded.
     pub last_distro_ok: Option<bool>,
     /// Batches we were warned about (batch_id, expected_trainer).
@@ -302,22 +298,20 @@ impl ClusterProjection {
 
                 // ── Train ────────────────────────────────────────────────────
                 EventData::Train(train) => match train {
-                    Train::BatchesAssigned(ba) => {
-                        node.train.batches_assigned = ba.num_batches as u64;
-                        node.train.batch_downloads.clear();
+                    Train::BatchAssigned(ba) => {
+                        node.train.batches_assigned += 1;
+                        node.train
+                            .batch_downloads
+                            .entry(ba.batch_id)
+                            .or_insert(BatchDownload { result: None });
                         node.train.training_in_progress = false;
                         node.train.witness = None;
                     }
-                    Train::BatchDataDownloadStart(_) => {
-                        for batch_id in batch_id_tags(event) {
-                            node.train
-                                .batch_downloads
-                                .insert(*batch_id, BatchDownload { result: None });
-                        }
-                    }
+                    Train::BatchDataDownloadStart(_) => {}
                     Train::BatchDataDownloadComplete(c) => {
-                        for batch_id in batch_id_tags(event) {
-                            if let Some(dl) = node.train.batch_downloads.get_mut(batch_id) {
+                        // Mark all pending downloads as complete
+                        for (_, dl) in node.train.batch_downloads.iter_mut() {
+                            if dl.result.is_none() {
                                 dl.result = Some(c.result);
                             }
                         }
@@ -325,7 +319,11 @@ impl ClusterProjection {
                     Train::TrainingStarted(_) => {
                         node.train.training_in_progress = true;
                     }
-                    Train::TrainingFinished(crate::train::TrainingFinished { step, loss }) => {
+                    Train::TrainingFinished(crate::train::TrainingFinished {
+                        batch_id: _,
+                        step,
+                        loss,
+                    }) => {
                         node.train.training_in_progress = false;
                         if let Some(loss) = *loss {
                             node.losses.push((*step, loss));
@@ -342,16 +340,13 @@ impl ClusterProjection {
                         });
                     }
                     Train::UntrainedBatchWarning(ubw) => {
-                        for batch_id in batch_id_tags(event) {
-                            node.train
-                                .untrained_warnings
-                                .push((*batch_id, ubw.expected_trainer.clone()));
-                        }
+                        node.train
+                            .untrained_warnings
+                            .push((ubw.batch_id, ubw.expected_trainer.clone()));
                     }
                     Train::DistroResultDeserializeStarted(_)
                     | Train::DistroResultDeserializeComplete(_) => {}
                     Train::ApplyDistroResultsStart(_) => {
-                        node.train.last_distro_batch_ids = batch_id_tags(event).cloned().collect();
                         node.train.last_distro_ok = None;
                     }
                     Train::ApplyDistroResultsComplete(arc) => {
@@ -427,17 +422,13 @@ impl ClusterProjection {
                             },
                         );
                     }
-                    P2P::GossipNeighborsChanged(gnc) => {
-                        for removed in &gnc.removed_neighbors {
-                            node.p2p.gossip_neighbors.remove(removed);
-                        }
-                        for added in &gnc.new_neighbors {
-                            node.p2p.gossip_neighbors.insert(*added);
-                        }
+                    P2P::GossipNeighborUp(gnu) => {
+                        node.p2p.gossip_neighbors.insert(gnu.endpoint_id);
                     }
-                    P2P::GossipLagged(_) => {
-                        // nothing
+                    P2P::GossipNeighborDown(gnd) => {
+                        node.p2p.gossip_neighbors.remove(&gnd.endpoint_id);
                     }
+                    P2P::GossipLagged(_) => {}
                     P2P::ConnectionLatencyChanged(clc) => {
                         if let Some(peer) = node.p2p.peers.get_mut(&clc.endpoint_id) {
                             peer.latency_ms = Some(clc.latency_ms);
@@ -450,70 +441,44 @@ impl ClusterProjection {
                         to_endpoint_id,
                         size_bytes,
                     }) => {
-                        if let Some(tag_id) = operation_id(event) {
-                            node.p2p.uploads.insert(
-                                tag_id,
-                                BlobTransfer {
-                                    peer_endpoint_id: *to_endpoint_id,
-                                    size_bytes: *size_bytes,
-                                    bytes_transferred: 0,
-                                    result: None,
-                                },
-                            );
-                        }
+                        // Upload events don't carry a blob hash yet (iroh doesn't
+                        // expose upload-side progress); skip tracking for now.
+                        let _ = (to_endpoint_id, size_bytes);
                     }
-                    P2P::BlobUploadProgress(bup) => {
-                        if let Some(tag_id) = operation_id(event) {
-                            if let Some(t) = node.p2p.uploads.get_mut(&tag_id) {
-                                t.bytes_transferred = bup.bytes_transferred;
-                            }
-                        }
-                    }
-                    P2P::BlobUploadCompleted(buc) => {
-                        if let Some(tag_id) = operation_id(event) {
-                            if let Some(t) = node.p2p.uploads.get_mut(&tag_id) {
-                                t.result = Some(buc.0.clone());
-                            }
-                        }
-                    }
+                    P2P::BlobUploadProgress(_) | P2P::BlobUploadCompleted(_) => {}
                     P2P::BlobDownloadStarted(bds) => {
-                        if let Some(tag_id) = operation_id(event) {
-                            node.p2p.downloads.insert(
-                                tag_id,
-                                BlobTransfer {
-                                    peer_endpoint_id: EndpointId::from_bytes(&[0; 32]).unwrap(),
-                                    size_bytes: bds.size_bytes,
-                                    bytes_transferred: 0,
-                                    result: None,
-                                },
-                            );
-                        }
+                        node.p2p.downloads.insert(
+                            bds.blob,
+                            BlobDownloadTransfer {
+                                size_bytes: bds.size_bytes,
+                                bytes_transferred: 0,
+                                result: None,
+                            },
+                        );
                     }
                     P2P::BlobDownloadProgress(bdp) => {
-                        if let Some(tag_id) = operation_id(event) {
-                            if let Some(t) = node.p2p.downloads.get_mut(&tag_id) {
-                                t.bytes_transferred = bdp.bytes_transferred;
-                            }
+                        if let Some(t) = node.p2p.downloads.get_mut(&bdp.blob) {
+                            t.bytes_transferred = bdp.bytes_transferred;
                         }
                     }
                     P2P::BlobDownloadCompleted(bdc) => {
-                        if let Some(tag_id) = operation_id(event) {
-                            if let Some(t) = node.p2p.downloads.get_mut(&tag_id) {
-                                t.result = Some(if bdc.success {
-                                    Ok(())
-                                } else {
-                                    Err(bdc.error_string.clone().unwrap_or_default())
-                                });
-                            }
+                        if let Some(t) = node.p2p.downloads.get_mut(&bdc.blob) {
+                            t.result = Some(if bdc.success {
+                                Ok(())
+                            } else {
+                                Err(bdc.error_string.clone().unwrap_or_default())
+                            });
                         }
                     }
-                    P2P::GossipMessageSent(_) => {
+                    P2P::GossipTrainingResultSent(_) | P2P::GossipFinishedSent(_) => {
                         node.p2p.gossip_sent += 1;
                     }
-                    P2P::GossipMessageReceived(_) => {
+                    P2P::GossipTrainingResultReceived(_) | P2P::GossipFinishedReceived(_) => {
                         node.p2p.gossip_recv += 1;
                     }
-                    P2P::BlobDownloadRequested(_) => {}
+                    P2P::BlobDownloadRequested(_)
+                    | P2P::BlobDownloadTryProvider(_)
+                    | P2P::BlobDownloadProviderFailed(_) => {}
                 },
 
                 // ── ResourceSnapshot ─────────────────────────────────────────
@@ -543,52 +508,16 @@ impl ClusterProjection {
         // ── Phase 2: cluster-level step_batches updates ───────────────────────
 
         match &event.data {
-            EventData::Train(Train::BatchDataDownloadStart(_)) => {
-                for batch_id in batch_id_tags(event) {
-                    let use_prev = self.in_prev(*batch_id);
-                    let view = if use_prev {
-                        self.snapshot
-                            .prev_step_batches
-                            .entry(*batch_id)
-                            .or_default()
-                    } else {
-                        self.snapshot.step_batches.entry(*batch_id).or_default()
-                    };
-                    view.downloads
-                        .insert(node_id.to_string(), BatchDownload { result: None });
-                }
-            }
-            EventData::Train(Train::BatchDataDownloadComplete(c)) => {
-                for batch_id in batch_id_tags(event) {
-                    let use_prev = self.in_prev(*batch_id);
-                    let map = if use_prev {
-                        &mut self.snapshot.prev_step_batches
-                    } else {
-                        &mut self.snapshot.step_batches
-                    };
-                    if let Some(view) = map.get_mut(batch_id) {
-                        if let Some(dl) = view.downloads.get_mut(node_id) {
-                            dl.result = Some(c.result);
-                        }
-                    }
-                }
-            }
-            EventData::Train(Train::TrainingFinished(_)) => {
-                // Credit all batches assigned to this node in either step map.
-                for map in [
-                    &mut self.snapshot.step_batches,
-                    &mut self.snapshot.prev_step_batches,
-                ] {
-                    let to_mark: Vec<BatchId> = map
-                        .iter()
-                        .filter(|(_, v)| v.assigned_to.as_deref() == Some(node_id))
-                        .map(|(id, _)| *id)
-                        .collect();
-                    for batch_id in to_mark {
-                        if let Some(view) = map.get_mut(&batch_id) {
-                            view.trained_by.insert(node_id.to_string());
-                        }
-                    }
+            EventData::Train(Train::TrainingFinished(tf)) => {
+                let batch_id = tf.batch_id;
+                let use_prev = self.in_prev(batch_id);
+                let map = if use_prev {
+                    &mut self.snapshot.prev_step_batches
+                } else {
+                    &mut self.snapshot.step_batches
+                };
+                if let Some(view) = map.get_mut(&batch_id) {
+                    view.trained_by.insert(node_id.to_string());
                 }
             }
             _ => {}
@@ -653,21 +582,12 @@ impl Default for ClusterProjection {
 mod tests {
     use super::*;
     use crate::events::EventData;
-    use crate::{Tags, client, cooldown, train, warmup};
+    use crate::{client, cooldown, train, warmup};
     use chrono::Utc;
 
     fn make_event(data: EventData) -> Event {
         Event {
             timestamp: Utc::now(),
-            tags: Tags::default(),
-            data,
-        }
-    }
-
-    fn make_event_with_tags(data: EventData, tags: Tags) -> Event {
-        Event {
-            timestamp: Utc::now(),
-            tags,
             data,
         }
     }
@@ -773,6 +693,7 @@ mod tests {
             node_id,
             &make_event(EventData::Train(crate::events::Train::TrainingFinished(
                 train::TrainingFinished {
+                    batch_id: BatchId(psyche_core::ClosedInterval { start: 0, end: 0 }),
                     step: 5,
                     loss: Some(2.5),
                 },
@@ -818,29 +739,21 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_download_tracked_by_tag() {
+    fn test_batch_assigned_tracked() {
         let mut proj = ClusterProjection::new();
         let node_id = "node-5";
         let batch_id = BatchId(psyche_core::ClosedInterval { start: 0, end: 9 });
 
         proj.apply_node_event(
             node_id,
-            &make_event_with_tags(
-                EventData::Train(crate::events::Train::BatchDataDownloadStart(
-                    train::BatchDataDownloadStart,
-                )),
-                Tags {
-                    batch_ids: Some(vec![batch_id]),
-                    ..Default::default()
-                },
-            ),
+            &make_event(EventData::Train(crate::events::Train::BatchAssigned(
+                train::BatchAssigned { batch_id },
+            ))),
         );
 
         let node = &proj.snapshot().nodes[node_id];
         assert!(node.train.batch_downloads.contains_key(&batch_id));
-
-        // Also mirrored into cluster step_batches
-        assert!(proj.snapshot().step_batches.contains_key(&batch_id));
+        assert_eq!(node.train.batches_assigned, 1);
     }
 
     #[test]
@@ -884,11 +797,14 @@ mod tests {
 
         proj.apply_node_event(
             node_id,
-            &make_event(EventData::P2P(crate::events::P2P::GossipNeighborsChanged(
-                p2p::GossipNeighborsChanged {
-                    removed_neighbors: vec![],
-                    new_neighbors: vec![ep1, ep2],
-                },
+            &make_event(EventData::P2P(crate::events::P2P::GossipNeighborUp(
+                p2p::GossipNeighborUp { endpoint_id: ep1 },
+            ))),
+        );
+        proj.apply_node_event(
+            node_id,
+            &make_event(EventData::P2P(crate::events::P2P::GossipNeighborUp(
+                p2p::GossipNeighborUp { endpoint_id: ep2 },
             ))),
         );
 
@@ -898,11 +814,8 @@ mod tests {
 
         proj.apply_node_event(
             node_id,
-            &make_event(EventData::P2P(crate::events::P2P::GossipNeighborsChanged(
-                p2p::GossipNeighborsChanged {
-                    removed_neighbors: vec![ep1],
-                    new_neighbors: vec![],
-                },
+            &make_event(EventData::P2P(crate::events::P2P::GossipNeighborDown(
+                p2p::GossipNeighborDown { endpoint_id: ep1 },
             ))),
         );
 

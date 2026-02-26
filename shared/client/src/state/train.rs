@@ -241,7 +241,6 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
         });
 
         let assigned_batches = get_batch_ids_for_node(&data_assignments, &self.identity);
-        let num_assigned_batches = assigned_batches.len();
         info!(
             step = state.progress.step,
             round = round.height,
@@ -257,14 +256,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
             state.progress.step, round.height, epoch, client_index, committee_proof.position, committee_proof.committee, witness_proof.position, witness_proof.witness, warmup_lr_between
         );
 
-        event!(
-            train::BatchesAssigned {
-                num_batches: num_assigned_batches as u32
-            },
-            Tags {
-                batch_ids: assigned_batches
-            }
-        );
+        for batch_id in &assigned_batches {
+            event!(train::BatchAssigned {
+                batch_id: *batch_id
+            });
+        }
         let model_task_runner = self.model_task_runner.clone();
         let finished = Arc::new(AtomicBool::new(false));
 
@@ -365,12 +361,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                             let cancel_training = cancel_training.clone();
                             let prev_self_distro_results = prev_self_distro_results.clone();
                             in_progress.push(tokio::task::spawn_blocking(move || {
-                                event!(
-                                    train::TrainingStarted,
-                                    Tags {
-                                        batch_ids: vec![batch_id]
-                                    }
-                                );
+                                event!(train::TrainingStarted { batch_id });
                                 trainer.train(
                                     step,
                                     Batch {
@@ -400,15 +391,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                                 nonce,
                             } = completed_trainer.map_err(|_| TrainError::TrainCrashed)??;
 
-                            event!(
-                                train::TrainingFinished {
-                                    step: step.into(),
-                                    loss: Some(loss.into())
-                                },
-                                Tags {
-                                    batch_ids: vec![batch_id]
-                                }
-                            );
+                            event!(train::TrainingFinished {
+                                batch_id,
+                                step: step.into(),
+                                loss: Some(loss.into())
+                            });
 
                             debug!(step=step, loss=loss, batch_id=%batch_id, "Got training output, DisTrO results generated");
 
@@ -578,16 +565,14 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                 trace!("Have commitments for batches {:?}", commitments.keys().collect::<Vec<_>>());
                 trace!("Have payloads for hashes {:?}", payloads.lock().unwrap().keys().collect::<Vec<_>>());
 
-                let batch_ids_for_tags = batch_ids.clone();
                 for batch_id in batch_ids {
                     let batch_commitments = match commitments.get(&batch_id) {
                         Some(x) => x,
                         None => {
                             let expected_trainer = data_assignments.get(&batch_id);
                             event!(train::UntrainedBatchWarning {
+                                batch_id,
                                 expected_trainer: expected_trainer.map(|t| format!("{:?}", t)),
-                            }, Tags {
-                                batch_ids: vec![batch_id]
                             });
                             warn!(
                                 batch_id = %batch_id,
@@ -657,12 +642,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                     }
                 }
 
-                event!(
-                    train::ApplyDistroResultsStart,
-                    Tags {
-                        batch_ids: batch_ids_for_tags.clone()
-                    }
-                );
+                event!(train::ApplyDistroResultsStart);
                 let futures: Vec<JoinHandle<std::result::Result<Trainer, ApplyDistroResultError>>> =
                     trainers
                         .into_iter()
@@ -683,21 +663,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                 }.await;
                 let trainers: Vec<_> = match apply_result {
                     Ok(trainers) => {
-                        event!(
-                            train::ApplyDistroResultsComplete(Ok(())),
-                            Tags {
-                                batch_ids: batch_ids_for_tags
-                            }
-                        );
+                        event!(train::ApplyDistroResultsComplete(Ok(())));
                         trainers
                     }
                     Err(e) => {
-                        event!(
-                            train::ApplyDistroResultsComplete(Err(e.to_string())),
-                            Tags {
-                                batch_ids: batch_ids_for_tags
-                            }
-                        );
+                        event!(train::ApplyDistroResultsComplete(Err(e.to_string())));
                         return Err(e);
                     }
                 };

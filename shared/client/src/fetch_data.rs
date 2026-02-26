@@ -86,12 +86,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> DataFetcher<T, A> {
 
                         let mut retry_count = 0;
                         let batch = loop {
-                            event!(
-                                train::BatchDataDownloadStart,
-                                Tags {
-                                    batch_ids: vec![batch_id]
-                                }
-                            );
+                            event!(train::BatchDataDownloadStart);
                             match data_provider.lock().await.get_samples(batch_id).await {
                                 Ok(batch) => break batch,
                                 Err(err) if retry_count < MAX_RETRIES => {
@@ -101,24 +96,14 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> DataFetcher<T, A> {
                                         "Data fetch error for batch_id={} (attempt {}/{}): \"{:#}\". Retrying in {}ms",
                                         batch_id, retry_count, MAX_RETRIES, err, delay_ms
                                     );
-                                    event!(
-                                        train::BatchDataDownloadComplete{result: Err(())},
-                                        Tags {
-                                            batch_ids: vec![batch_id]
-                                        }
-                                    );
+                                    event!(train::BatchDataDownloadComplete{result: Err(())});
 
                                     sleep(Duration::from_millis(delay_ms)).await;
                                     continue;
                                 }
                                 Err(err) => {
                                     error!("Data fetch failed for batch_id={} after {} attempts: {err:#}", batch_id, MAX_RETRIES);
-                                    event!(
-                                        train::BatchDataDownloadComplete{result: Err(())},
-                                        Tags {
-                                            batch_ids: vec![batch_id]
-                                        }
-                                    );
+                                    event!(train::BatchDataDownloadComplete{result: Err(())});
                                     return;
                                 }
                             }

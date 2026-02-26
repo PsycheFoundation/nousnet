@@ -21,8 +21,8 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 
+use crate::EventStore;
 use crate::events::client;
-use crate::{EventStore, Tags};
 
 /// Forwards `error!()` tracing events to the global [`EventStore`].
 ///
@@ -58,7 +58,6 @@ impl<S: Subscriber> Layer<S> for EventStoreTracingLayer {
                 client::Warning { message }.into()
             },
             chrono::Utc::now(),
-            Tags::default(),
         );
     }
 }
