@@ -17,11 +17,11 @@ use psyche_decentralized_testing::{
     CLIENT_CONTAINER_PREFIX, NGINX_PROXY_PREFIX,
     chaos::{ChaosAction, ChaosScheduler},
     docker_setup::{
-        e2e_testing_setup, e2e_testing_setup_with_min, kill_all_clients, spawn_new_client,
-        spawn_new_client_with_monitoring,
+        e2e_testing_setup, e2e_testing_setup_with_config, e2e_testing_setup_with_min,
+        kill_all_clients, spawn_new_client, spawn_new_client_with_monitoring,
     },
     docker_watcher::{DockerWatcher, Response},
-    utils::{SolanaTestClient, write_keypair_to_file},
+    utils::{ConfigBuilder, SolanaTestClient, write_keypair_to_file},
 };
 use rstest::*;
 use serial_test::serial;
@@ -273,7 +273,12 @@ async fn test_rejoining_client_delay() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // initialize a Solana run with 1 client
-    let _cleanup = e2e_testing_setup(docker.clone(), 1).await;
+    // Use short warmup so client-2 (spawned after 40s) always joins after warmup ends,
+    // ensuring epoch 0 has completed and checkpoint transitions to P2P
+    let config = ConfigBuilder::new()
+        .with_num_clients(1)
+        .with_warmup_time(25);
+    let _cleanup = e2e_testing_setup_with_config(docker.clone(), 1, config, None).await;
 
     let solana_client = Arc::new(SolanaTestClient::new("test".to_string(), None).await);
 
@@ -341,7 +346,11 @@ async fn disconnect_client() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // Initialize a Solana run with 3 clients
-    let _cleanup = e2e_testing_setup(docker.clone(), 3).await;
+    // Use longer warmup to give 3 clients time to establish reliable P2P gossip connections
+    let config = ConfigBuilder::new()
+        .with_num_clients(3)
+        .with_warmup_time(200);
+    let _cleanup = e2e_testing_setup_with_config(docker.clone(), 3, config, None).await;
 
     let _monitor_client_1 = watcher
         .monitor_container(
