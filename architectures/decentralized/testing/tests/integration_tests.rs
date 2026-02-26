@@ -124,12 +124,7 @@ async fn test_two_clients_three_epochs_run() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // Initialize a Solana run with 2 clients
-    // Use longer max_round_train_time to give gossip more time to recover
-    // from transient failures on CI (default 30s can cause spurious evictions)
-    let config = ConfigBuilder::new()
-        .with_num_clients(2)
-        .with_max_round_train_time(60);
-    let _cleanup = e2e_testing_setup_with_config(docker.clone(), 2, config, None).await;
+    let _cleanup = e2e_testing_setup(docker.clone(), 2).await;
 
     // Monitor the client container
     let _monitor_client_1 = watcher
