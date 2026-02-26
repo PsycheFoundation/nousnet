@@ -172,7 +172,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                             node_scroll,
                             zoom: waterfall_zoom,
                             x_scroll: waterfall_x_scroll,
-                            filter: &waterfall_filter,
+                            filter: waterfall_filter,
                         },
                         inner,
                     ),

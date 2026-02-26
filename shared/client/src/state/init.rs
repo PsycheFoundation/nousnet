@@ -343,7 +343,8 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> RunInitConfigAndIO<T
                                         "Downloading {}, revision: {:?} (if needed)",
                                         hub_repo.repo_id, revision
                                     );
-                                    download_model_repo_async(
+                                    event!(warmup::CheckpointDownloadStarted { size_bytes: 0 });
+                                    let downloaded = download_model_repo_async(
                                         &repo_id,
                                         revision,
                                         None,
@@ -351,7 +352,9 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> RunInitConfigAndIO<T
                                         Some(init_config.hub_max_concurrent_downloads),
                                         false,
                                     )
-                                    .await?
+                                    .await?;
+                                    event!(warmup::CheckpointDownloadComplete(Ok(())));
+                                    downloaded
                                 };
                                 let repo_files = model_is_local;
                                 let checkpoint_extra_files = repo_files
@@ -443,9 +446,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> RunInitConfigAndIO<T
                                     prefix.as_deref().unwrap_or("")
                                 );
 
+                                event!(warmup::CheckpointDownloadStarted { size_bytes: 0 });
                                 let repo_files =
                                     download_model_from_gcs_async(&bucket, prefix.as_deref())
                                         .await?;
+                                event!(warmup::CheckpointDownloadComplete(Ok(())));
 
                                 let checkpoint_extra_files = repo_files
                                     .iter()
@@ -470,6 +475,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> RunInitConfigAndIO<T
                         };
 
                         info!("Loading model...");
+                        event!(warmup::ModelLoadStarted);
 
                         let model_task_runner = ModelTaskRunner::new(
                             init_config.eval_tasks,

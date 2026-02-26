@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use chrono::{DateTime, Utc};
 use derive_more::Display;
 use first_class_variants::first_class_variants;
@@ -20,12 +18,10 @@ pub enum SubscriptionStatus {
 /// Each field is `None` when the event is not part of that operation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Tags {
-    pub blob_upload: Option<u64>,
-    pub blob_download: Option<u64>,
+    pub operation_id: Option<u64>,
+    pub model_parameter: Option<String>,
     pub batch_ids: Option<Vec<BatchId>>,
     pub blob: Option<BlobHash>,
-    pub checkpoint_download: Option<u64>,
-    pub coordinator_call: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +145,10 @@ pub enum P2P {
         removed_neighbors: Vec<EndpointId>,
         new_neighbors: Vec<EndpointId>,
     },
+    #[display("gossip sent: {message_type}")]
+    GossipMessageSent { message_type: String },
+    #[display("gossip received: {message_type}")]
+    GossipMessageReceived { message_type: String },
     #[display("gossip lagged")]
     GossipLagged,
     #[display("blob made available for upload")]
@@ -165,11 +165,8 @@ pub enum P2P {
 
     #[display("blob download requested")]
     BlobDownloadRequested,
-    #[display("blob download started from {remote_id}: {size_bytes}B")]
-    BlobDownloadStarted {
-        remote_id: EndpointId,
-        size_bytes: u64,
-    },
+    #[display("blob download started: {size_bytes}B")]
+    BlobDownloadStarted { size_bytes: u64 },
     #[display("blob download progress: {bytes_transferred}B")]
     BlobDownloadProgress { bytes_transferred: u64 },
     #[display("blob download completed: success={success}")]
@@ -177,10 +174,6 @@ pub enum P2P {
         success: bool,
         error_string: Option<String>,
     },
-    #[display("gossip sent: {message_type}")]
-    GossipMessageSent { message_type: String },
-    #[display("gossip received: {message_type}")]
-    GossipMessageReceived { message_type: String },
 }
 
 #[first_class_variants(
@@ -201,11 +194,8 @@ pub enum Train {
     TrainingStarted,
     #[display("training finished: step={step} loss={loss:?}")]
     TrainingFinished { step: u64, loss: Option<f64> },
-    #[display("untrained batch warning")]
-    UntrainedBatchWarning {
-        batch_id: BatchId,
-        expected_trainer: Option<String>,
-    },
+    #[display("WARNING: untrained batch")]
+    UntrainedBatchWarning { expected_trainer: Option<String> },
     #[display("witness elected: step={step} round={round} epoch={epoch}")]
     WitnessElected {
         step: u64,
@@ -220,9 +210,11 @@ pub enum Train {
     #[display("distro result deserialize complete")]
     DistroResultDeserializeComplete(Result<(), String>),
     #[display("apply distro results start")]
-    ApplyDistroResultsStart { batch_ids: HashSet<BatchId> },
+    ApplyDistroResultsStart,
     #[display("apply distro results complete")]
     ApplyDistroResultsComplete(Result<(), String>),
+    #[display("distro result added to consensus")]
+    DistroResultAddedToConsensus(Result<(), String>),
 }
 
 #[first_class_variants(

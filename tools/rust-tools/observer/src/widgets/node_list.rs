@@ -9,6 +9,7 @@ pub struct NodeListWidget<'a> {
     pub node_ids: &'a [String],
     pub selected_node_idx: Option<usize>,
     pub node_scroll: usize,
+    #[allow(unused)]
     pub focused: bool,
 }
 

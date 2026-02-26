@@ -458,14 +458,14 @@ mod tests {
                 size_bytes: 1024,
             },
             Tags {
-                blob_upload: 123,
+                operation_id: 123,
                 blob: iroh_blobs::Hash::from_bytes([1u8; 32]),
             }
         );
 
         let tags =
             EventStore::with_backend::<InMemoryBackend, _, _>(|b| b.events()[0].tags.clone());
-        assert!(tags.as_ref().is_some_and(|t| t.blob_upload == Some(123)));
+        assert!(tags.as_ref().is_some_and(|t| t.operation_id == Some(123)));
         assert!(tags.as_ref().is_some_and(|t| t.blob.is_some()));
     }
 

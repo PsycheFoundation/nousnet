@@ -366,7 +366,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                             let prev_self_distro_results = prev_self_distro_results.clone();
                             in_progress.push(tokio::task::spawn_blocking(move || {
                                 event!(
-                                    train::BatchDataDownloadStart,
+                                    train::TrainingStarted,
                                     Tags {
                                         batch_ids: vec![batch_id]
                                     }
@@ -578,14 +578,16 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                 trace!("Have commitments for batches {:?}", commitments.keys().collect::<Vec<_>>());
                 trace!("Have payloads for hashes {:?}", payloads.lock().unwrap().keys().collect::<Vec<_>>());
 
+                let batch_ids_for_tags = batch_ids.clone();
                 for batch_id in batch_ids {
                     let batch_commitments = match commitments.get(&batch_id) {
                         Some(x) => x,
                         None => {
                             let expected_trainer = data_assignments.get(&batch_id);
                             event!(train::UntrainedBatchWarning {
-                                batch_id,
                                 expected_trainer: expected_trainer.map(|t| format!("{:?}", t)),
+                            }, Tags {
+                                batch_ids: vec![batch_id]
                             });
                             warn!(
                                 batch_id = %batch_id,
@@ -655,6 +657,12 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                     }
                 }
 
+                event!(
+                    train::ApplyDistroResultsStart,
+                    Tags {
+                        batch_ids: batch_ids_for_tags.clone()
+                    }
+                );
                 let futures: Vec<JoinHandle<std::result::Result<Trainer, ApplyDistroResultError>>> =
                     trainers
                         .into_iter()
@@ -666,11 +674,33 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
                             })
                         })
                         .collect::<Vec<_>>();
-                let trainers: Vec<_> = try_join_all(futures)
-                    .await
-                    .map_err(|_| ApplyDistroResultError::ThreadCrashed)?
-                    .into_iter()
-                    .collect::<Result<_, _>>()?;
+                let apply_result: Result<Vec<Trainer>, ApplyError> = async {
+                    let results = try_join_all(futures)
+                        .await
+                        .map_err(|_| ApplyDistroResultError::ThreadCrashed)?;
+                    let trainers: Vec<_> = results.into_iter().collect::<Result<_, _>>()?;
+                    Ok(trainers)
+                }.await;
+                let trainers: Vec<_> = match apply_result {
+                    Ok(trainers) => {
+                        event!(
+                            train::ApplyDistroResultsComplete(Ok(())),
+                            Tags {
+                                batch_ids: batch_ids_for_tags
+                            }
+                        );
+                        trainers
+                    }
+                    Err(e) => {
+                        event!(
+                            train::ApplyDistroResultsComplete(Err(e.to_string())),
+                            Tags {
+                                batch_ids: batch_ids_for_tags
+                            }
+                        );
+                        return Err(e);
+                    }
+                };
                 trace!(
                     "Apply time: {:.1}s, {} trainers ready",
                     (Instant::now() - apply_start).as_secs_f32(),

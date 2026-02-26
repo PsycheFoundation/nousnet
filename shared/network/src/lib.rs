@@ -719,6 +719,7 @@ where
             update = self.download_manager.poll_next() => {
                 match update {
                     Some(DownloadManagerEvent::Complete(result)) => {
+                        event!(p2p::BlobDownloadCompleted { success: true, error_string: None }, Tags { blob: result.hash });
                         Ok(Some(NetworkEvent::DownloadComplete(result)))
                     }
                     Some(DownloadManagerEvent::Update(update)) => {
@@ -726,7 +727,10 @@ where
                         Ok(self.on_download_update(update))
                     },
                     Some(DownloadManagerEvent::Failed(result)) => {
-                        self.state.download_progesses.remove(&result.blob_ticket.hash());
+                        let hash = result.blob_ticket.hash();
+                        let err_string = result.error.to_string();
+                        self.state.download_progesses.remove(&hash);
+                        event!(p2p::BlobDownloadCompleted { success: false, error_string: Some(err_string) }, Tags { blob: hash });
                         Ok(Some(NetworkEvent::DownloadFailed(result)))
                     }
                     None => Ok(None),
@@ -760,6 +764,26 @@ where
             .update_peer_bandwidth(&peer_id, peer_bw);
 
         let hash = update.blob_ticket.hash();
+
+        // Emit BlobDownloadStarted on first update, then BlobDownloadProgress on every update
+        // (including the first one). We don't include remote_id because the provider can change
+        // mid-download.
+        if !update.all_done {
+            if !self.state.download_progesses.contains_key(&hash) {
+                event!(
+                    p2p::BlobDownloadStarted {
+                        size_bytes: update.total_size
+                    },
+                    Tags { blob: hash }
+                );
+            }
+            event!(
+                p2p::BlobDownloadProgress {
+                    bytes_transferred: update.downloaded_size
+                },
+                Tags { blob: hash }
+            );
+        }
 
         if update.all_done {
             self.state.download_progesses.remove(&hash);

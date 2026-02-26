@@ -265,9 +265,23 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                                 match &broadcast.data {
                                                     BroadcastType::TrainingResult(training_result) => {
                                                         trace!("Got training result gossip message from {from}: step {} batch id {}", broadcast.step, training_result.batch_id);
+                                                        event!(
+                                                            p2p::GossipMessageReceived {
+                                                                message_type: "training_result".to_string(),
+                                                            },
+                                                            Tags {
+                                                                batch_ids: vec![training_result.batch_id],
+                                                                blob: training_result.ticket.hash()
+                                                            }
+                                                        );
                                                     }
                                                     BroadcastType::Finished(_) => {
                                                         trace!("Got finished gossip message from {from}: step {}", broadcast.step);
+                                                        event!(
+                                                            p2p::GossipMessageReceived {
+                                                                message_type: "finished".to_string(),
+                                                            }
+                                                        );
                                                     }
                                                 }
                                                 let apply_result = run.apply_message(client.id, broadcast)?;
@@ -403,6 +417,13 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                                 }
                                             },
                                             Ok(ticket) => {
+                                                event!(
+                                                    warmup::P2PParamInfoResponse,
+                                                    Tags {
+                                                        model_parameter: parameter_name.clone(),
+                                                        blob: ticket.hash()
+                                                    }
+                                                );
                                                 info!(parameter = parameter_name, hash = %ticket.hash(), "Sending requested model parameter blob ticket");
                                                 if let Err(e) = protocol_req_tx.send(Ok(ticket)) {
                                                     warn!("Could not send model parameter {parameter_name} blob ticket. Error: {e:?}");
@@ -419,6 +440,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                                                 }
                                             },
                                             Ok(config_ticket) => {
+                                                event!(warmup::P2PParamInfoResponse, Tags { blob: config_ticket.hash() });
                                                 info!(hash = %config_ticket.hash(), "Sending requested model config blob ticket");
                                                 if let Err(e) = protocol_req_tx.send(Ok(config_ticket)) {
                                                     warn!("Could not send model config blob ticket. Error: {e:?}");
@@ -444,6 +466,11 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                             })};
 
                             p2p.broadcast(&training_result)?;
+                            event!(
+                                p2p::GossipMessageSent {
+                                    message_type: "finished".to_string(),
+                                }
+                            );
                             broadcasts.push((training_result.clone(), step));
 
                             // simulate us recving it & apply like anyone else's
@@ -468,21 +495,28 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
                             let signature = network_identity.raw_p2p_sign(&private_key, &commitment_data_hash);
                             let commitment = Commitment { data_hash: commitment_data_hash, signature};
 
+                            let hash = ticket.hash();
                             event!(
-                                {
-                                    p2p::GossipMessageSent {
-                                        message_type: "distro_result".to_string(),
-                                    }
-                                },
+                                p2p::BlobAddedToStore,
                                 Tags {
                                     batch_ids: vec![batch_id],
-                                    blob: ticket.hash()
+                                    blob: hash
                                 }
                             );
                             let training_result = Broadcast { step, proof, nonce: rand::rng().random(), commitment, data: BroadcastType::TrainingResult(TrainingResult { batch_id, ticket })};
 
                             p2p.broadcast(&training_result)?;
                             broadcasts.push((training_result.clone(), step));
+
+                            event!(
+                                p2p::GossipMessageSent {
+                                    message_type: "distro_result".to_string(),
+                                },
+                                Tags {
+                                    batch_ids: vec![batch_id],
+                                    blob: hash
+                                }
+                            );
 
 
                             // simulate us recving it & apply like anyone else's
@@ -594,6 +628,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static, B: Backend<T> + 'sta
 
                                     let router = router.clone();
 
+                                    event!(warmup::P2PParamInfoRequest { from: router.endpoint().id() }, Tags { model_parameter: param_name.clone() });
                                     match blob_ticket_param_request_task(
                                         ModelRequestType::Parameter(param_name.clone()),
                                         router,

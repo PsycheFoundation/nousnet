@@ -10,12 +10,8 @@ use crate::events::{Client, Cooldown, Event, EventData, P2P, ResourceSnapshot, T
 
 // ── Tag helpers ───────────────────────────────────────────────────────────────
 
-fn upload_tag(event: &Event) -> Option<u64> {
-    event.tags.blob_upload
-}
-
-fn download_tag(event: &Event) -> Option<u64> {
-    event.tags.blob_download
+fn operation_id(event: &Event) -> Option<u64> {
+    event.tags.operation_id
 }
 
 fn batch_id_tags(event: &Event) -> impl Iterator<Item = &BatchId> {
@@ -346,19 +342,22 @@ impl ClusterProjection {
                         });
                     }
                     Train::UntrainedBatchWarning(ubw) => {
-                        node.train
-                            .untrained_warnings
-                            .push((ubw.batch_id, ubw.expected_trainer.clone()));
+                        for batch_id in batch_id_tags(event) {
+                            node.train
+                                .untrained_warnings
+                                .push((*batch_id, ubw.expected_trainer.clone()));
+                        }
                     }
-                    Train::DistroResultDeserializeStarted(_) => {}
-                    Train::DistroResultDeserializeComplete(_) => {}
-                    Train::ApplyDistroResultsStart(ars) => {
-                        node.train.last_distro_batch_ids = ars.batch_ids.clone();
+                    Train::DistroResultDeserializeStarted(_)
+                    | Train::DistroResultDeserializeComplete(_) => {}
+                    Train::ApplyDistroResultsStart(_) => {
+                        node.train.last_distro_batch_ids = batch_id_tags(event).cloned().collect();
                         node.train.last_distro_ok = None;
                     }
                     Train::ApplyDistroResultsComplete(arc) => {
                         node.train.last_distro_ok = Some(arc.0.is_ok());
                     }
+                    Train::DistroResultAddedToConsensus(_) => {}
                 },
 
                 // ── Warmup ───────────────────────────────────────────────────
@@ -451,7 +450,7 @@ impl ClusterProjection {
                         to_endpoint_id,
                         size_bytes,
                     }) => {
-                        if let Some(tag_id) = upload_tag(event) {
+                        if let Some(tag_id) = operation_id(event) {
                             node.p2p.uploads.insert(
                                 tag_id,
                                 BlobTransfer {
@@ -464,25 +463,25 @@ impl ClusterProjection {
                         }
                     }
                     P2P::BlobUploadProgress(bup) => {
-                        if let Some(tag_id) = upload_tag(event) {
+                        if let Some(tag_id) = operation_id(event) {
                             if let Some(t) = node.p2p.uploads.get_mut(&tag_id) {
                                 t.bytes_transferred = bup.bytes_transferred;
                             }
                         }
                     }
                     P2P::BlobUploadCompleted(buc) => {
-                        if let Some(tag_id) = upload_tag(event) {
+                        if let Some(tag_id) = operation_id(event) {
                             if let Some(t) = node.p2p.uploads.get_mut(&tag_id) {
                                 t.result = Some(buc.0.clone());
                             }
                         }
                     }
                     P2P::BlobDownloadStarted(bds) => {
-                        if let Some(tag_id) = download_tag(event) {
+                        if let Some(tag_id) = operation_id(event) {
                             node.p2p.downloads.insert(
                                 tag_id,
                                 BlobTransfer {
-                                    peer_endpoint_id: bds.remote_id,
+                                    peer_endpoint_id: EndpointId::from_bytes(&[0; 32]).unwrap(),
                                     size_bytes: bds.size_bytes,
                                     bytes_transferred: 0,
                                     result: None,
@@ -491,14 +490,14 @@ impl ClusterProjection {
                         }
                     }
                     P2P::BlobDownloadProgress(bdp) => {
-                        if let Some(tag_id) = download_tag(event) {
+                        if let Some(tag_id) = operation_id(event) {
                             if let Some(t) = node.p2p.downloads.get_mut(&tag_id) {
                                 t.bytes_transferred = bdp.bytes_transferred;
                             }
                         }
                     }
                     P2P::BlobDownloadCompleted(bdc) => {
-                        if let Some(tag_id) = download_tag(event) {
+                        if let Some(tag_id) = operation_id(event) {
                             if let Some(t) = node.p2p.downloads.get_mut(&tag_id) {
                                 t.result = Some(if bdc.success {
                                     Ok(())
