@@ -331,14 +331,20 @@ async fn run_gateway() -> Result<()> {
         args.write_endpoint_file.clone()
     };
 
+    let endpoint_addr = network.router().endpoint().addr();
+    let endpoints = vec![endpoint_addr];
+
     if let Some(ref endpoint_file) = endpoint_file {
-        let endpoint_addr = network.router().endpoint().addr();
-        let endpoints = vec![endpoint_addr];
         let content =
             serde_json::to_string(&endpoints).context("Failed to serialize endpoint address")?;
         fs::write(endpoint_file, content).context("Failed to write endpoint file")?;
         info!("Wrote gateway endpoint to {:?}", endpoint_file);
         info!("Other nodes can bootstrap using this file");
+    } else {
+        let endpoint_json = serde_json::to_string_pretty(&endpoints)
+            .context("Failed to serialize endpoint address")?;
+        info!("Gateway endpoint address (use for bootstrapping inference nodes):");
+        println!("\n{}\n", endpoint_json);
     }
 
     info!("Waiting for gossip mesh to stabilize...");
