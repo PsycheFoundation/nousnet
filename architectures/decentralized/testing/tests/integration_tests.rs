@@ -346,11 +346,7 @@ async fn disconnect_client() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // Initialize a Solana run with 3 clients
-    // Use longer warmup to give 3 clients time to establish reliable P2P gossip connections
-    let config = ConfigBuilder::new()
-        .with_num_clients(3)
-        .with_warmup_time(200);
-    let _cleanup = e2e_testing_setup_with_config(docker.clone(), 3, config, None).await;
+    let _cleanup = e2e_testing_setup(docker.clone(), 3).await;
 
     let _monitor_client_1 = watcher
         .monitor_container(
@@ -395,6 +391,11 @@ async fn disconnect_client() {
     let mut seen_health_checks: Vec<u64> = Vec::new();
     let mut untrained_batches: Vec<Vec<u64>> = Vec::new();
     let mut killed_client = false;
+    // Track which client IDs have been confirmed active in Training state.
+    // We only kill after all 3 are verified, to prevent killing when a client
+    // dropped out during warmup (which would give wrong health check counts).
+    let mut clients_confirmed_training: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     while let Some(response) = watcher.log_rx.recv().await {
         match response {
@@ -417,6 +418,11 @@ async fn disconnect_client() {
                     );
                 }
 
+                // Track clients that have entered Training state
+                if new_state == RunState::RoundTrain.to_string() {
+                    clients_confirmed_training.insert(client_id.clone());
+                }
+
                 if killed_client
                     && epoch > 0
                     && new_state == RunState::WaitingForMembers.to_string()
@@ -426,9 +432,10 @@ async fn disconnect_client() {
                 }
 
                 if epoch == 0
-                    && step == 2
+                    && step >= 2
                     && old_state == RunState::RoundTrain.to_string()
                     && !killed_client
+                    && clients_confirmed_training.len() >= 3
                 {
                     let epoch_clients = solana_client.get_current_epoch_clients().await;
                     assert_eq!(epoch_clients.len(), 3);
