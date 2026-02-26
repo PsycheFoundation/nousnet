@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -50,6 +50,10 @@ struct Args {
 
     #[arg(long)]
     write_endpoint_file: Option<PathBuf>,
+
+    /// Bearer token secret required for API authentication (optional)
+    #[arg(long, env = "GATEWAY_API_SECRET")]
+    api_secret: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +70,7 @@ struct GatewayState {
     available_nodes: RwLock<HashMap<EndpointId, InferenceNodeInfo>>,
     pending_requests: RwLock<HashMap<String, mpsc::Sender<InferenceResponse>>>,
     network_tx: mpsc::Sender<(EndpointId, InferenceMessage)>,
+    api_secret: Option<String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
@@ -118,8 +123,20 @@ struct ChatCompletionResponse {
 #[axum::debug_handler]
 async fn handle_inference(
     State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Result<Json<ChatCompletionResponse>, AppError> {
+    if let Some(ref secret) = state.api_secret {
+        let authorized = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|token| token == secret);
+        if !authorized {
+            return Err(AppError::Unauthorized);
+        }
+    }
+
     let nodes = state.available_nodes.read().await;
     let node = nodes.values().next().ok_or(AppError::NoNodesAvailable)?;
 
@@ -201,6 +218,7 @@ enum AppError {
     NoNodesAvailable,
     Timeout,
     InternalError,
+    Unauthorized,
 }
 
 impl IntoResponse for AppError {
@@ -212,6 +230,7 @@ impl IntoResponse for AppError {
             ),
             AppError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "Inference request timed out"),
             AppError::InternalError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized"),
         };
         (status, message).into_response()
     }
@@ -357,6 +376,7 @@ async fn run_gateway() -> Result<()> {
         available_nodes: RwLock::new(HashMap::new()),
         pending_requests: RwLock::new(HashMap::new()),
         network_tx,
+        api_secret: args.api_secret.clone(),
     });
 
     info!("Gateway ready! Listening on http://{}", args.listen_addr);
