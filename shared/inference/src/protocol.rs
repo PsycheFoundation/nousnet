@@ -3,9 +3,37 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InferenceGossipMessage {
+    NodeAvailable {
+        model_name: String,
+        checkpoint_id: Option<String>,
+        capabilities: Vec<String>,
+    },
+    NodeUnavailable,
+    ReloadCheckpoint {
+        checkpoint_id: String,
+        checkpoint_source: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InferenceMessage {
+    Request(InferenceRequest),
+    Response(InferenceResponse),
+    StreamChunk { request_id: String, text: String },
+    Cancel { request_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceRequest {
     pub request_id: String,
-    pub prompt: String,
+    pub messages: Vec<ChatMessage>,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: usize,
     #[serde(default = "default_temperature")]
@@ -45,7 +73,10 @@ mod tests {
     fn test_request_serialization() {
         let req = InferenceRequest {
             request_id: "test-123".to_string(),
-            prompt: "Once upon a time".to_string(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "Once upon a time".to_string(),
+            }],
             max_tokens: 50,
             temperature: 0.7,
             top_p: 0.9,
@@ -56,18 +87,19 @@ mod tests {
         let parsed: InferenceRequest = serde_json::from_str(&json).unwrap();
 
         assert_eq!(req.request_id, parsed.request_id);
-        assert_eq!(req.prompt, parsed.prompt);
+        assert_eq!(req.messages.len(), parsed.messages.len());
+        assert_eq!(req.messages[0].content, parsed.messages[0].content);
     }
 
     #[test]
     fn test_request_defaults() {
-        let json = r#"{"request_id": "test", "prompt": "hello"}"#;
+        let json = r#"{"request_id": "test", "messages": [{"role": "user", "content": "hello"}]}"#;
         let req: InferenceRequest = serde_json::from_str(json).unwrap();
 
         assert_eq!(req.max_tokens, 100);
         assert_eq!(req.temperature, 1.0);
         assert_eq!(req.top_p, 1.0);
-        assert_eq!(req.stream, false);
+        assert!(!req.stream);
     }
 
     #[test]
@@ -109,7 +141,7 @@ mod tests {
     fn test_request_with_custom_params() {
         let json = r#"{
             "request_id": "custom-1",
-            "prompt": "Test prompt",
+            "messages": [{"role": "user", "content": "Test prompt"}],
             "max_tokens": 200,
             "temperature": 0.5,
             "top_p": 0.95,
@@ -118,10 +150,62 @@ mod tests {
 
         let req: InferenceRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.request_id, "custom-1");
-        assert_eq!(req.prompt, "Test prompt");
+        assert_eq!(req.messages[0].content, "Test prompt");
         assert_eq!(req.max_tokens, 200);
         assert_eq!(req.temperature, 0.5);
         assert_eq!(req.top_p, 0.95);
-        assert_eq!(req.stream, true);
+        assert!(req.stream);
+    }
+
+    #[test]
+    fn test_inference_message_serialization() {
+        let req = InferenceRequest {
+            request_id: "test-1".to_string(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
+            max_tokens: 10,
+            temperature: 0.7,
+            top_p: 0.9,
+            stream: false,
+        };
+
+        let msg = InferenceMessage::Request(req);
+        let bytes = postcard::to_stdvec(&msg).unwrap();
+        let parsed: InferenceMessage = postcard::from_bytes(&bytes).unwrap();
+
+        match parsed {
+            InferenceMessage::Request(r) => {
+                assert_eq!(r.request_id, "test-1");
+                assert_eq!(r.messages[0].content, "Hello");
+            }
+            _ => panic!("Expected Request variant"),
+        }
+    }
+
+    #[test]
+    fn test_gossip_message_serialization() {
+        let msg = InferenceGossipMessage::NodeAvailable {
+            model_name: "gpt2".to_string(),
+            checkpoint_id: Some("checkpoint-123".to_string()),
+            capabilities: vec!["streaming".to_string()],
+        };
+
+        let bytes = postcard::to_stdvec(&msg).unwrap();
+        let parsed: InferenceGossipMessage = postcard::from_bytes(&bytes).unwrap();
+
+        match parsed {
+            InferenceGossipMessage::NodeAvailable {
+                model_name,
+                checkpoint_id,
+                capabilities,
+            } => {
+                assert_eq!(model_name, "gpt2");
+                assert_eq!(checkpoint_id, Some("checkpoint-123".to_string()));
+                assert_eq!(capabilities, vec!["streaming"]);
+            }
+            _ => panic!("Expected NodeAvailable variant"),
+        }
     }
 }

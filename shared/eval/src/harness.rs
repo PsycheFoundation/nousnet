@@ -121,63 +121,63 @@ pub struct TokenizedGenerateUntilDocument {
 
 impl TokenizedLLHDocument {
     pub fn from_document(doc: Document, tokenizer: &Tokenizer, fewshot_prefix: &str) -> Self {
-        // e.g.
-        // choice: 'Sunlight is the source of energy for nearly all ecosystems.'
-        // text: 'Which statement best explains why photosynthesis is the foundation of most food webs?'
-        // request: 'Which statement best explains why photosynthesis is the foundation of most food webs? Sunlight is the source of energy for nearly all ecosystems.'
+        // We tokenize (fewshot_prefix + question_text) as one string then tokenize each choice separately.
+        // context_tokens = tokenize(fewshot_prefix + doc.text)
+        // choice_tokens = tokenize(" " + choice)
+        // full_tokens = [BOS] + context_tokens + choice_tokens
+
         let mut requests: Vec<Vec<i64>> = Vec::new();
         let mut choices_str = Vec::new();
         let mut choices_token_len = Vec::new();
-        let mut choices: Vec<Vec<i64>> = Vec::new();
         let mut acc_uncond_tokens_len = Vec::new();
 
-        // Tokenize fewshot prefix once
-        let fewshot_tokens: Vec<i64> = tokenizer
-            .encode(fewshot_prefix, false)
+        // Build full context string: fewshot_prefix + doc.text
+        let context_string = if fewshot_prefix.is_empty() {
+            doc.text.clone()
+        } else {
+            format!("{}{}", fewshot_prefix, doc.text)
+        };
+
+        // Tokenize context once (full fewshots + question up to "Answer:")
+        let context_tokens: Vec<i64> = tokenizer
+            .encode(context_string.as_str(), false)
             .unwrap()
             .get_ids()
             .iter()
             .map(|x| *x as i64)
             .collect();
 
+        let bos_token_id = tokenizer.token_to_id("<s>").unwrap_or(1);
+
         for choice in doc.choices.iter() {
             choices_str.push(choice.clone());
 
-            // [fewshot_prefix] + [document_text + choice]
-            let text_and_choice = format!("{} {}", doc.text, choice);
-            let text_choice_tokens: Vec<i64> = tokenizer
-                .encode(text_and_choice, false)
+            // Tokenize the full context+choice string
+            let full_string = format!("{} {}", context_string, choice);
+            let full_tokens: Vec<i64> = tokenizer
+                .encode(full_string.as_str(), false)
                 .unwrap()
                 .get_ids()
                 .iter()
                 .map(|x| *x as i64)
                 .collect();
 
-            let mut full_request = fewshot_tokens.clone();
-            full_request.extend_from_slice(&text_choice_tokens);
+            // Extract only the choice tokens (the new tokens beyond context_tokens)
+            // We do this to avoid an extra space that was appearing otherwise
+            let choice_tokens = full_tokens[context_tokens.len()..].to_vec();
+
+            // BOS + context + choice
+            let mut full_request = vec![bos_token_id as i64];
+            full_request.extend_from_slice(&context_tokens);
+            full_request.extend_from_slice(&choice_tokens);
             requests.push(full_request.clone());
 
-            // Extract choice tokens from the text_choice_tokens part
-            // Tokenizing "choice" alone produces different tokens than tokenizing "text + choice" together.
-            // So, we extract choice tokens iterating the full request backwards to ensure exact matching.
-            for idx in 1..text_choice_tokens.len() {
-                let choice_tokens = &text_choice_tokens[text_choice_tokens.len() - idx..]
-                    .iter()
-                    .map(|x| *x as u32)
-                    .collect::<Vec<_>>();
-                let choice_str = tokenizer.decode(choice_tokens, false).unwrap();
-                if choice_str.contains(choice) {
-                    let choice_tokens = choice_tokens.iter().map(|x| *x as i64).collect::<Vec<_>>();
-                    choices.push(choice_tokens.clone());
-                    choices_token_len.push(choice_tokens.len());
-                    break;
-                }
-            }
+            choices_token_len.push(choice_tokens.len());
 
             if TASKS_WITH_ACC_UNCOND.contains(&doc.eval_name.as_str()) {
                 let acc_uncond_fmt = format!("Answer: {choice}");
-                for idx in *choices_token_len.last().unwrap()..text_choice_tokens.len() {
-                    let acc_uncond_tokens = &text_choice_tokens[text_choice_tokens.len() - idx..]
+                for idx in *choices_token_len.last().unwrap()..full_tokens.len() {
+                    let acc_uncond_tokens = &full_tokens[full_tokens.len() - idx..]
                         .iter()
                         .map(|x| *x as u32)
                         .collect::<Vec<_>>();
@@ -211,7 +211,6 @@ impl Task {
         match self.task_type {
             TaskType::LogLikelihood(llh) => {
                 let mut docs = llh.get_documents();
-                docs.shuffle(&mut self.rand);
                 if let Some(limit) = limit {
                     docs.truncate(limit);
                 }
@@ -222,10 +221,12 @@ impl Task {
                     .into_iter()
                     .map(|doc| {
                         // Build fewshot prefix for this document
+                        let category = doc.category.as_deref().unwrap_or("default");
+                        let preamble = llh.get_preamble(category);
+
                         let fewshot_prefix = if self.num_fewshot > 0 {
                             // Get fewshot examples for this document's category
-                            let category = doc.category.as_deref().unwrap_or("default");
-                            let mut fewshot_examples = fewshot_by_category
+                            let fewshot_examples = fewshot_by_category
                                 .get(category)
                                 .cloned()
                                 .unwrap_or_else(|| {
@@ -236,16 +237,33 @@ impl Task {
                                         .cloned()
                                         .unwrap_or_else(Vec::new)
                                 });
-                            fewshot_examples.shuffle(&mut self.rand);
-                            fewshot_examples
-                                .into_iter()
-                                .take(self.num_fewshot)
-                                .map(|x| format!("{}{}", x.text, x.choices[x.answer]))
-                                .collect::<Vec<_>>()
-                                .join("\n\n")
+
+                            // MMLU/ARC tasks use first_n sampling (deterministic) other tasks like PIQA/Hellaswag use random sampling
+                            let should_shuffle = ![
+                                MMLU::name(),
+                                MMLUCF::name(),
+                                ArcEasy::name(),
+                                ArcChallenge::name(),
+                            ]
+                            .contains(&name.as_str());
+
+                            let mut fewshot_examples = fewshot_examples;
+                            if should_shuffle {
+                                fewshot_examples.shuffle(&mut self.rand);
+                            }
+
+                            // Build fewshots to match how test question is tokenized:
+                            // text (ends with "Answer:") + " " + choice
+                            preamble
+                                + &fewshot_examples
+                                    .into_iter()
+                                    .take(self.num_fewshot)
+                                    .map(|x| format!("{} {}", x.text, x.choices[x.answer]))
+                                    .collect::<Vec<_>>()
+                                    .join("\n\n")
                                 + "\n\n"
                         } else {
-                            String::new()
+                            preamble
                         };
 
                         TokenizedLLHDocument::from_document(doc, tokenizer, &fewshot_prefix)
@@ -259,7 +277,6 @@ impl Task {
             }
             TaskType::GenerateUntil(gu_docs) => {
                 let mut docs = gu_docs.get_documents();
-                docs.shuffle(&mut self.rand);
                 if let Some(limit) = limit {
                     docs.truncate(limit);
                 }
@@ -476,29 +493,24 @@ impl PreparedTask {
 
                 // The request already contains [fewshot_tokens] + [question + choice_without_last_token]
                 let full_request = request;
-                let input_length = &full_request.len();
 
                 let request_tensor = Tensor::from_slice(&full_request)
                     .to(options.model.device())
                     .unsqueeze(0);
                 let (logits, _) = {
                     let _no_grad = tch::no_grad_guard();
-                    options
-                        .model
-                        .forward(&request_tensor, None, None, None, None, None)
+                    options.model.forward(
+                        &request_tensor,
+                        None,
+                        None,
+                        None,
+                        Some(choice.len() as i64),
+                        None,
+                    )
                 };
 
-                let logits = logits.unwrap().squeeze_dim(0).slice(0, 0, None, 1);
-
-                // Get tensor of shape `[choice.len(), vocab_size]` containing the
-                // model's logits for each token of the `choice` text.
-                // This should skip the fewshot tokens and get the tokens from the end.
-                let logits = logits.slice(
-                    0,
-                    *input_length as i64 - choice.len() as i64,
-                    *input_length as i64,
-                    1,
-                );
+                // Shape: [choice.len(), vocab_size]
+                let logits = logits.unwrap().squeeze_dim(0);
 
                 let greedy_tokens: Vec<i64> = logits.argmax(-1, false).try_into().unwrap();
                 let exact_match = greedy_tokens.eq(&choice);

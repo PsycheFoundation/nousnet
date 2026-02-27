@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use bollard::Docker;
-use psyche_client::IntegrationTestLogMarker;
+use psyche_core::IntegrationTestLogMarker;
 use psyche_decentralized_testing::{
     CLIENT_CONTAINER_PREFIX, VALIDATOR_CONTAINER_PREFIX,
     chaos::{ChaosAction, ChaosScheduler},
@@ -42,7 +42,7 @@ async fn test_pause_solana_validator(
     };
 
     // Solana client
-    let solana_client = Arc::new(SolanaTestClient::new(run_id).await);
+    let solana_client = Arc::new(SolanaTestClient::new(run_id, None).await);
 
     // Monitor clients
     for i in 1..=n_clients {
@@ -130,7 +130,7 @@ async fn test_delay_solana_test_validator(
     };
 
     // Solana client
-    let solana_client = Arc::new(SolanaTestClient::new(run_id).await);
+    let solana_client = Arc::new(SolanaTestClient::new(run_id, None).await);
 
     // Monitor clients
     for i in 1..=n_clients {
@@ -214,7 +214,7 @@ async fn test_delay_solana_client(#[values(1, 2)] n_clients: u8, #[values(0, 10)
     };
 
     // Solana client
-    let solana_client = Arc::new(SolanaTestClient::new(run_id).await);
+    let solana_client = Arc::new(SolanaTestClient::new(run_id, None).await);
 
     // Monitor clients
     for i in 1..=n_clients {

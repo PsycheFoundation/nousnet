@@ -10,6 +10,7 @@ use psyche_coordinator::RunState;
 use psyche_coordinator::SOLANA_MAX_STRING_LEN;
 use psyche_coordinator::TickResult;
 use psyche_coordinator::Witness;
+use psyche_coordinator::model::Checkpoint;
 use psyche_coordinator::model::HttpLLMTrainingDataLocation;
 use psyche_coordinator::model::HttpTrainingDataLocation;
 use psyche_coordinator::model::HubRepo;
@@ -467,7 +468,11 @@ impl CoordinatorInstanceState {
         self.tick()
     }
 
-    pub fn checkpoint(&mut self, payer: &Pubkey, repo: HubRepo) -> Result<()> {
+    pub fn checkpoint(
+        &mut self,
+        payer: &Pubkey,
+        repo: Checkpoint,
+    ) -> Result<()> {
         // O(n) on clients, reconsider
         let id = self.clients_state.find_signer(payer)?;
         let index = self
