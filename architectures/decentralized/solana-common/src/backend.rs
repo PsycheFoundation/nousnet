@@ -20,7 +20,7 @@ use anchor_client::{
 };
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use psyche_coordinator::model::{self, Checkpoint};
+use psyche_coordinator::model::Checkpoint;
 use psyche_coordinator::{CommitteeProof, Coordinator, HealthChecks};
 use psyche_core::IntegrationTestLogMarker;
 use psyche_watcher::{Backend as WatcherBackend, OpportunisticData};
