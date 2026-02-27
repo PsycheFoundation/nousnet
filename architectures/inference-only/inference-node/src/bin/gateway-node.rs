@@ -514,3 +514,126 @@ async fn run_gateway() -> Result<()> {
     info!("Shutdown complete");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use std::sync::Arc;
+    use tokio::sync::{RwLock, mpsc};
+    use tower::ServiceExt;
+
+    use super::*;
+
+    fn make_app(secret: Option<&str>) -> axum::Router {
+        let (network_tx, _network_rx) = mpsc::channel(1);
+        let state = Arc::new(GatewayState {
+            available_nodes: RwLock::new(Default::default()),
+            pending_requests: RwLock::new(Default::default()),
+            network_tx,
+            api_secret: secret.map(|s| s.to_string()),
+        });
+        Router::new()
+            .route(
+                "/v1/chat/completions",
+                axum::routing::post(handle_inference),
+            )
+            .with_state(state)
+    }
+
+    fn chat_request_body() -> &'static str {
+        r#"{"messages":[{"role":"user","content":"hello"}]}"#
+    }
+
+    #[tokio::test]
+    async fn no_secret_configured_allows_unauthenticated_requests() {
+        let app = make_app(None);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(chat_request_body()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // No nodes available, but auth passed — expect 503 not 401
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn correct_bearer_token_is_accepted() {
+        let app = make_app(Some("supersecret"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer supersecret")
+                    .body(Body::from(chat_request_body()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Auth passed, no nodes available — expect 503 not 401
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn missing_auth_header_is_rejected() {
+        let app = make_app(Some("supersecret"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(chat_request_body()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn wrong_token_is_rejected() {
+        let app = make_app(Some("supersecret"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer wrongtoken")
+                    .body(Body::from(chat_request_body()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn non_bearer_scheme_is_rejected() {
+        let app = make_app(Some("supersecret"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Basic supersecret")
+                    .body(Body::from(chat_request_body()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}
