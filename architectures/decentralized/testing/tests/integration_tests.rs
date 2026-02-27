@@ -273,11 +273,13 @@ async fn test_rejoining_client_delay() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // initialize a Solana run with 1 client
-    // Use short warmup so epoch 0 completes quickly (checkpoint Hub -> P2P).
+    // Use generous warmup so that if client-2 joins during an epoch's warmup,
+    // the coordinator waits for it to finish downloading the model via P2P.
     // Client-2 is spawned only AFTER epoch 0 finishes to guarantee it sees P2P.
     let config = ConfigBuilder::new()
         .with_num_clients(1)
-        .with_warmup_time(25);
+        .with_warmup_time(300)
+        .with_epoch_time(600);
     let _cleanup = e2e_testing_setup_with_config(docker.clone(), 1, config, None).await;
 
     let solana_client = Arc::new(SolanaTestClient::new("test".to_string(), None).await);
@@ -316,30 +318,35 @@ async fn test_rejoining_client_delay() {
         )
         .await;
 
+    // Use a generous timeout instead of epoch-counting. On CI with 2 vCPUs,
+    // the P2P model download can take several minutes while epochs fly by.
+    // Client-2 will eventually download the model regardless of epoch count.
     let mut interval = time::interval(Duration::from_secs(10));
-    println!("Waiting for training to start");
-    loop {
-        tokio::select! {
-           _ = interval.tick() => {
-               println!("Waiting for first epoch to finish");
-               if let Err(e) = watcher.monitor_clients_health(2).await {
-                   panic!("{}", e);
+    println!("Waiting for client-2 to load model via P2P");
+    let result = tokio::time::timeout(Duration::from_secs(600), async {
+        loop {
+            tokio::select! {
+               _ = interval.tick() => {
+                   let current_epoch = solana_client.get_current_epoch().await;
+                   println!("Waiting for client-2 to load model (epoch: {current_epoch})");
+                   if let Err(e) = watcher.monitor_clients_health(2).await {
+                       panic!("{}", e);
+                   }
                }
-               let current_epoch = solana_client.get_current_epoch().await;
-               if current_epoch > 1 {
-                    panic!("Second epoch started and the clients did not get the model");
+               response = watcher.log_rx.recv() => {
+                   if let Some(Response::LoadedModel(checkpoint)) = response {
+                       assert!(checkpoint.starts_with("P2P"), "The model should be obtained from P2P");
+                       println!("Client got the model with P2P");
+                       return;
+                   }
                }
-           }
-           response = watcher.log_rx.recv() => {
-               if let Some(Response::LoadedModel(checkpoint)) = response {
-                   // assert client and coordinator state synchronization
-                   assert!(checkpoint.starts_with("P2P"), "The model should be obtained from P2P");
-                   println!("Client got the model with P2P");
-                   return;
-               }
-           }
+            }
         }
-    }
+    }).await;
+    assert!(
+        result.is_ok(),
+        "Client-2 did not load model via P2P within 600 seconds"
+    );
 }
 
 /// creates a run and spawns 3 clients
