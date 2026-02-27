@@ -11,8 +11,8 @@ use std::{
     collections::HashMap,
     process::{Child, Command},
     sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -212,8 +212,8 @@ pub struct PythonDistributedCausalLM {
     // synchronizes access to underlying model
     iteration: Arc<AtomicUsize>,
     pub(crate) parallelism: ParallelismConfig,
-    #[allow(unused)]
-    children: Vec<Child>,
+    children: Arc<Mutex<Vec<Child>>>,
+    shutting_down: Arc<AtomicBool>,
 }
 
 unsafe impl Send for PythonDistributedCausalLM {}
@@ -363,6 +363,42 @@ impl PythonDistributedCausalLM {
             })
             .collect();
         let children = children?;
+        let children = Arc::new(Mutex::new(children));
+        let shutting_down = Arc::new(AtomicBool::new(false));
+
+        // Monitor thread that polls the children sidecars to ensure they are still alive.
+        // If any of them exit unexpectedly, we kill all children and abort to avoid NCCL hangs.
+        {
+            let children = children.clone();
+            let shutting_down = shutting_down.clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_secs(1));
+                    if shutting_down.load(Ordering::Acquire) {
+                        return; // Avoid calling abort() on clean shutdown, just exit the loop
+                    }
+                    let Ok(mut children) = children.lock() else {
+                        return;
+                    };
+                    for (i, child) in children.iter_mut().enumerate() {
+                        if let Ok(Some(status)) = child.try_wait() {
+                            error!(
+                                "Sidecar process (rank {}) exited with status: {} — \
+                             force-aborting to avoid NCCL hang",
+                                i + 1,
+                                status
+                            );
+                            for child in children.iter_mut() {
+                                let _ = child.kill();
+                            }
+                            // abort() because exit() hangs on NCCL/CUDA atexit handlers
+                            std::process::abort();
+                        }
+                    }
+                }
+            });
+        }
+
         let (comm, local) = local.join().unwrap()?;
 
         Ok(Self {
@@ -370,12 +406,29 @@ impl PythonDistributedCausalLM {
             local: local.into(),
             parallelism,
             children,
+            shutting_down,
             iteration: Arc::new(AtomicUsize::new(0)),
         })
     }
 
     pub fn iteration(&self) -> Arc<AtomicUsize> {
         self.iteration.clone()
+    }
+
+    fn kill_children(&self) {
+        let Ok(mut children) = self.children.lock() else {
+            return;
+        };
+        for child in children.iter_mut() {
+            let pid = child.id();
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                continue;
+            }
+            if let Err(e) = child.kill() {
+                debug!("Failed to kill sidecar process {pid}: {e}");
+            }
+            let _ = child.wait();
+        }
     }
 }
 
@@ -504,6 +557,8 @@ impl CausalLM for PythonDistributedCausalLM {
     }
 
     fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+
         let operation = serde_json::json!({
             "operation": "exit",
         });
@@ -524,6 +579,13 @@ impl CausalLM for PythonDistributedCausalLM {
 
     fn convert(&self, state_dict: Option<HashMap<String, Tensor>>) -> HashMap<String, Tensor> {
         self.local.convert(state_dict)
+    }
+}
+
+impl Drop for PythonDistributedCausalLM {
+    fn drop(&mut self) {
+        self.shutting_down.store(true, Ordering::Release);
+        self.kill_children();
     }
 }
 
