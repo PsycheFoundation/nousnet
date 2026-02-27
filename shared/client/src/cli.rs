@@ -1,9 +1,7 @@
 use crate::{CheckpointConfig, WandBInfo};
 
-use crate::UploadInfo;
 use anyhow::{Result, anyhow, bail};
 use clap::Args;
-use psyche_data_provider::{GcsUploadInfo, HubUploadInfo};
 use psyche_eval::tasktype_from_name;
 use psyche_modeling::Devices;
 use psyche_network::{DiscoveryMode, RelayKind, SecretKey};
