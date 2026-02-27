@@ -29,6 +29,9 @@ use tracing::info;
 mod app;
 mod network_identity;
 
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[derive(Parser, Debug)]
 struct CliArgs {
     #[command(subcommand)]
@@ -170,7 +173,6 @@ async fn async_main() -> Result<()> {
             authorizer,
         } => {
             psyche_client::prepare_environment();
-
             info!(
                 "============ Client Startup at {} ============",
                 OffsetDateTime::now_utc()
@@ -217,20 +219,16 @@ async fn async_main() -> Result<()> {
                 (args.logs == LogOutput::TUI).then(|| Tabs::new(Default::default(), &TAB_NAMES)),
             )?;
 
-            let mut backup_clusters = Vec::new();
-            for (rpc, ws) in [(rpc_2, ws_rpc_2), (rpc_3, ws_rpc_3)] {
-                let rpc = if rpc.is_empty() {
-                    cluster.rpc.clone()
-                } else {
-                    rpc
-                };
-                let ws = if ws.is_empty() {
-                    cluster.ws_rpc.clone()
-                } else {
-                    ws
-                };
-                backup_clusters.push(Cluster::Custom(rpc, ws))
-            }
+            let backup_clusters: Vec<_> = [(rpc_2, ws_rpc_2), (rpc_3, ws_rpc_3)]
+                .into_iter()
+                .filter_map(|(rpc, ws)| {
+                    if rpc.is_empty() || ws.is_empty() {
+                        None
+                    } else {
+                        Some(Cluster::Custom(rpc, ws))
+                    }
+                })
+                .collect();
 
             let app = build_app(AppParams {
                 cancel,
