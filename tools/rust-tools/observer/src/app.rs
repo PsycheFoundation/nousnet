@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use indexmap::IndexMap;
 use psyche_event_sourcing::projection::ClusterSnapshot;
@@ -12,7 +11,7 @@ pub use crate::widgets::waterfall::EventCategory;
 pub struct NodeFileStats {
     /// Total bytes of all .postcard files on disk for this node.
     pub total_bytes: u64,
-    /// Lifetime average write rate: total_bytes / elapsed_since_first_seen.
+    /// Average write rate: total_bytes / (last_event_time - first_event_time).
     pub bytes_per_sec: u64,
 }
 
@@ -69,8 +68,6 @@ pub struct App {
     /// Empty set means show all events.
     pub waterfall_filter: HashSet<EventCategory>,
     cached_snapshot: Option<(usize, ClusterSnapshot)>,
-    /// Tracks when each node was first observed for lifetime bps calculation.
-    node_first_seen: HashMap<String, Instant>,
 }
 
 fn scan_node_sizes(events_dir: &Path) -> HashMap<String, u64> {
@@ -121,7 +118,6 @@ impl App {
             waterfall_x_scroll: 0,
             waterfall_filter: HashSet::new(),
             cached_snapshot: None,
-            node_first_seen: HashMap::new(),
         }
     }
 
@@ -298,18 +294,22 @@ impl App {
     }
 
     fn refresh_file_stats(&mut self) {
-        let now = Instant::now();
         let current_sizes = scan_node_sizes(&self.events_dir);
+        let ranges = self.timeline.node_timestamp_ranges();
 
         self.node_file_stats.clear();
         for (node_id, &total_bytes) in &current_sizes {
-            let first_seen = *self.node_first_seen.entry(node_id.clone()).or_insert(now);
-            let elapsed = now.duration_since(first_seen).as_secs();
-            let bytes_per_sec = if elapsed > 1 {
-                total_bytes / elapsed
-            } else {
-                0
-            };
+            let bytes_per_sec = ranges
+                .get(node_id)
+                .map(|r| {
+                    let duration_secs = (r.last - r.first).num_seconds();
+                    if duration_secs > 0 {
+                        total_bytes / duration_secs as u64
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0);
             self.node_file_stats.insert(
                 node_id.clone(),
                 NodeFileStats {

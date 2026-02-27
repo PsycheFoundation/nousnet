@@ -5,9 +5,12 @@ use iroh_blobs::Hash as BlobHash;
 use psyche_coordinator::{RunState, model::Checkpoint};
 use psyche_core::BatchId;
 use psyche_metrics::SelectedPath;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::events::{Client, Cooldown, Event, EventData, P2P, ResourceSnapshot, Train, Warmup};
+use crate::events::{
+    Client, Cooldown, Coordinator, Event, EventData, P2P, ResourceSnapshot, RpcCallType, Train,
+    Warmup,
+};
 
 // ── Coordinator ───────────────────────────────────────────────────────────────
 
@@ -149,14 +152,39 @@ pub struct CooldownSnapshot {
 
 // ── Cluster-level batch view ──────────────────────────────────────────────────
 
+/// Per-node status for a batch's distro result propagation across the cluster.
+#[derive(Debug, Clone, Default)]
+pub struct NodeBatchStatus {
+    /// Received gossip announcing this batch's training result.
+    pub gossip_received: bool,
+    /// Blob download: None = not started, Some(None) = in progress, Some(Some(ok)) = done.
+    pub download: Option<Option<bool>>,
+    /// Deserialized: None = not started, Some(ok) = done.
+    pub deserialized: Option<bool>,
+}
+
+/// Witness election + RPC submission status for a single witness node.
+#[derive(Debug, Clone)]
+pub struct WitnessStatus {
+    pub info: WitnessInfo,
+    /// Whether this witness has submitted their attestation via RPC.
+    pub submitted: bool,
+    /// RPC result: None = pending, Some(ok) = got result.
+    pub rpc_result: Option<bool>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ClusterBatchView {
     /// Node assigned this batch, from coordinator state.
     pub assigned_to: Option<String>,
-    /// Download progress per node (node_id → status).
-    pub downloads: IndexMap<String, BatchDownload>,
-    /// Nodes that have completed training for this batch (inferred from TrainingFinished).
-    pub trained_by: HashSet<String>,
+    /// Blob hash for this batch's distro result (learned from GossipTrainingResultReceived).
+    pub blob: Option<BlobHash>,
+    /// Whether the assigned trainer downloaded the training data.
+    pub data_downloaded: Option<bool>,
+    /// Whether the assigned trainer finished training.
+    pub trained: bool,
+    /// Per non-trainer node: gossip / download / deserialization status.
+    pub node_status: IndexMap<String, NodeBatchStatus>,
 }
 
 // ── NodeSnapshot ──────────────────────────────────────────────────────────────
@@ -219,6 +247,14 @@ pub struct ClusterSnapshot {
     /// Nodes may still emit download/train events for these batches after the step
     /// has advanced (e.g. distro result application in progress).
     pub prev_step_batches: BTreeMap<BatchId, ClusterBatchView>,
+    /// Blob hash → BatchId mapping for correlating download events to batches.
+    pub blob_to_batch: HashMap<BlobHash, BatchId>,
+    /// Per-node "applied distro results" flag for the current step.
+    pub applied_by: HashSet<String>,
+    /// Per-node "applied distro results" flag for the previous step.
+    pub prev_applied_by: HashSet<String>,
+    /// Witnesses for the current step: node_id → witness submission status.
+    pub step_witnesses: IndexMap<String, WitnessStatus>,
 }
 
 impl ClusterSnapshot {
@@ -229,6 +265,10 @@ impl ClusterSnapshot {
             nodes: IndexMap::new(),
             step_batches: BTreeMap::new(),
             prev_step_batches: BTreeMap::new(),
+            blob_to_batch: HashMap::new(),
+            applied_by: HashSet::new(),
+            prev_applied_by: HashSet::new(),
+            step_witnesses: IndexMap::new(),
         }
     }
 }
@@ -508,16 +548,138 @@ impl ClusterProjection {
         // ── Phase 2: cluster-level step_batches updates ───────────────────────
 
         match &event.data {
+            EventData::Train(Train::BatchDataDownloadComplete(c)) => {
+                // Mark data_downloaded on all batches assigned to this node.
+                let ok = c.result.is_ok();
+                for (_, view) in self.snapshot.step_batches.iter_mut() {
+                    if view.assigned_to.as_deref() == Some(node_id)
+                        && view.data_downloaded.is_none()
+                    {
+                        view.data_downloaded = Some(ok);
+                    }
+                }
+                for (_, view) in self.snapshot.prev_step_batches.iter_mut() {
+                    if view.assigned_to.as_deref() == Some(node_id)
+                        && view.data_downloaded.is_none()
+                    {
+                        view.data_downloaded = Some(ok);
+                    }
+                }
+            }
             EventData::Train(Train::TrainingFinished(tf)) => {
                 let batch_id = tf.batch_id;
-                let use_prev = self.in_prev(batch_id);
-                let map = if use_prev {
+                let map = if self.in_prev(batch_id) {
                     &mut self.snapshot.prev_step_batches
                 } else {
                     &mut self.snapshot.step_batches
                 };
                 if let Some(view) = map.get_mut(&batch_id) {
-                    view.trained_by.insert(node_id.to_string());
+                    view.trained = true;
+                }
+            }
+            EventData::Train(Train::ApplyDistroResultsComplete(arc)) => {
+                // Apply is step-level: mark this node as having applied.
+                if arc.0.is_ok() {
+                    self.snapshot.applied_by.insert(node_id.to_string());
+                }
+            }
+            EventData::Train(Train::WitnessElected(we)) => {
+                self.snapshot.step_witnesses.insert(
+                    node_id.to_string(),
+                    WitnessStatus {
+                        info: WitnessInfo {
+                            step: we.step,
+                            round: we.round,
+                            epoch: we.epoch,
+                            index: we.index,
+                            committee_position: we.committee_position,
+                        },
+                        submitted: false,
+                        rpc_result: None,
+                    },
+                );
+            }
+            EventData::Train(Train::DistroResultDeserializeComplete(drc)) => {
+                if let Some(&batch_id) = self.snapshot.blob_to_batch.get(&drc.blob) {
+                    let map = if self.in_prev(batch_id) {
+                        &mut self.snapshot.prev_step_batches
+                    } else {
+                        &mut self.snapshot.step_batches
+                    };
+                    if let Some(view) = map.get_mut(&batch_id) {
+                        view.node_status
+                            .entry(node_id.to_string())
+                            .or_default()
+                            .deserialized = Some(drc.result.is_ok());
+                    }
+                }
+            }
+            EventData::P2P(P2P::GossipTrainingResultReceived(gtr)) => {
+                let batch_id = gtr.batch_id;
+                self.snapshot.blob_to_batch.insert(gtr.blob, batch_id);
+                let map = if self.in_prev(batch_id) {
+                    &mut self.snapshot.prev_step_batches
+                } else {
+                    &mut self.snapshot.step_batches
+                };
+                if let Some(view) = map.get_mut(&batch_id) {
+                    if view.blob.is_none() {
+                        view.blob = Some(gtr.blob);
+                    }
+                    view.node_status
+                        .entry(node_id.to_string())
+                        .or_default()
+                        .gossip_received = true;
+                }
+            }
+            EventData::P2P(P2P::BlobDownloadStarted(bds)) => {
+                if let Some(&batch_id) = self.snapshot.blob_to_batch.get(&bds.blob) {
+                    let map = if self.in_prev(batch_id) {
+                        &mut self.snapshot.prev_step_batches
+                    } else {
+                        &mut self.snapshot.step_batches
+                    };
+                    if let Some(view) = map.get_mut(&batch_id) {
+                        view.node_status
+                            .entry(node_id.to_string())
+                            .or_default()
+                            .download = Some(None);
+                    }
+                }
+            }
+            EventData::P2P(P2P::BlobDownloadCompleted(bdc)) => {
+                if let Some(&batch_id) = self.snapshot.blob_to_batch.get(&bdc.blob) {
+                    let map = if self.in_prev(batch_id) {
+                        &mut self.snapshot.prev_step_batches
+                    } else {
+                        &mut self.snapshot.step_batches
+                    };
+                    if let Some(view) = map.get_mut(&batch_id) {
+                        view.node_status
+                            .entry(node_id.to_string())
+                            .or_default()
+                            .download = Some(Some(bdc.success));
+                    }
+                }
+            }
+            EventData::Coordinator(Coordinator::RpcCallSubmitted(sub)) => {
+                if matches!(
+                    sub.call_type,
+                    RpcCallType::Witness | RpcCallType::WarmupWitness
+                ) {
+                    if let Some(ws) = self.snapshot.step_witnesses.get_mut(node_id) {
+                        ws.submitted = true;
+                    }
+                }
+            }
+            EventData::Coordinator(Coordinator::RpcCallResult(res)) => {
+                if matches!(
+                    res.call_type,
+                    RpcCallType::Witness | RpcCallType::WarmupWitness
+                ) {
+                    if let Some(ws) = self.snapshot.step_witnesses.get_mut(node_id) {
+                        ws.rpc_result = Some(res.success);
+                    }
                 }
             }
             _ => {}
@@ -534,13 +696,15 @@ impl ClusterProjection {
             // (distro result downloads, late TrainingFinished) after the coordinator
             // has advanced to the new step.
             self.snapshot.prev_step_batches = std::mem::take(&mut self.snapshot.step_batches);
+            self.snapshot.prev_applied_by = std::mem::take(&mut self.snapshot.applied_by);
+            self.snapshot.blob_to_batch.clear();
+            self.snapshot.step_witnesses.clear();
             for (batch_id, node_id) in &update.batch_assignments {
                 self.snapshot.step_batches.insert(
                     *batch_id,
                     ClusterBatchView {
                         assigned_to: Some(node_id.clone()),
-                        downloads: IndexMap::new(),
-                        trained_by: HashSet::new(),
+                        ..Default::default()
                     },
                 );
             }
@@ -582,7 +746,7 @@ impl Default for ClusterProjection {
 mod tests {
     use super::*;
     use crate::events::EventData;
-    use crate::{client, cooldown, train, warmup};
+    use crate::{client, cooldown, p2p, train, warmup};
     use chrono::Utc;
 
     fn make_event(data: EventData) -> Event {
@@ -868,5 +1032,99 @@ mod tests {
         });
 
         assert!(proj.snapshot().step_batches.is_empty());
+    }
+
+    #[test]
+    fn test_gossip_and_download_tracking() {
+        let mut proj = ClusterProjection::new();
+        let b1 = BatchId(psyche_core::ClosedInterval { start: 0, end: 4 });
+        let blob = iroh_blobs::Hash::from_bytes([42u8; 32]);
+
+        // Set up coordinator with a batch assigned to node-A.
+        let mut assignments = BTreeMap::new();
+        assignments.insert(b1, "node-A".to_string());
+        proj.apply_coordinator(CoordinatorStateSnapshot {
+            timestamp: Utc::now(),
+            run_state: RunState::RoundTrain,
+            epoch: 0,
+            step: 1,
+            checkpoint: psyche_coordinator::model::Checkpoint::Ephemeral,
+            client_ids: vec![],
+            min_clients: 1,
+            batch_assignments: assignments,
+        });
+
+        // node-B receives gossip for this batch.
+        proj.apply_node_event(
+            "node-B",
+            &make_event(EventData::P2P(
+                crate::events::P2P::GossipTrainingResultReceived(
+                    p2p::GossipTrainingResultReceived { blob, batch_id: b1 },
+                ),
+            )),
+        );
+
+        let view = &proj.snapshot().step_batches[&b1];
+        assert_eq!(view.blob, Some(blob));
+        assert!(view.node_status["node-B"].gossip_received);
+
+        // node-B starts downloading the blob.
+        proj.apply_node_event(
+            "node-B",
+            &make_event(EventData::P2P(crate::events::P2P::BlobDownloadStarted(
+                p2p::BlobDownloadStarted {
+                    blob,
+                    size_bytes: 1024,
+                },
+            ))),
+        );
+        assert_eq!(
+            proj.snapshot().step_batches[&b1].node_status["node-B"].download,
+            Some(None)
+        );
+
+        // node-B completes download.
+        proj.apply_node_event(
+            "node-B",
+            &make_event(EventData::P2P(crate::events::P2P::BlobDownloadCompleted(
+                p2p::BlobDownloadCompleted {
+                    blob,
+                    success: true,
+                    error_string: None,
+                },
+            ))),
+        );
+        assert_eq!(
+            proj.snapshot().step_batches[&b1].node_status["node-B"].download,
+            Some(Some(true))
+        );
+
+        // node-B deserializes it.
+        proj.apply_node_event(
+            "node-B",
+            &make_event(EventData::Train(
+                crate::events::Train::DistroResultDeserializeComplete(
+                    train::DistroResultDeserializeComplete {
+                        blob,
+                        result: Ok(()),
+                    },
+                ),
+            )),
+        );
+        assert_eq!(
+            proj.snapshot().step_batches[&b1].node_status["node-B"].deserialized,
+            Some(true)
+        );
+
+        // node-B applies distro results.
+        proj.apply_node_event(
+            "node-B",
+            &make_event(EventData::Train(
+                crate::events::Train::ApplyDistroResultsComplete(
+                    train::ApplyDistroResultsComplete(Ok(())),
+                ),
+            )),
+        );
+        assert!(proj.snapshot().applied_by.contains("node-B"));
     }
 }

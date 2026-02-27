@@ -1,16 +1,34 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use indexmap::IndexMap;
 
 use crate::events::{CoordinatorRecord, Event};
 use crate::projection::{ClusterProjection, ClusterSnapshot, CoordinatorStateSnapshot};
 use crate::store::try_decode_cobs_frame;
 
-const CHECKPOINT_INTERVAL: usize = 100;
+const CHECKPOINT_INTERVAL: usize = 5000;
 /// Subdirectory name under the events dir that holds coordinator records.
 const COORDINATOR_SUBDIR: &str = "coordinator";
+
+/// Progress report emitted during [`ClusterTimeline::from_events_dir_with_progress`].
+#[derive(Debug, Clone)]
+pub struct LoadProgress {
+    /// Current phase label, e.g. "scanning", "reading", "sorting", "indexing".
+    pub phase: &'static str,
+    /// Fraction complete within this phase, in `0.0..=1.0`.
+    pub fraction: f32,
+    /// Total bytes discovered on disk (available from "reading" phase onward).
+    pub total_bytes: u64,
+    /// Bytes read so far (meaningful during "reading" phase).
+    pub bytes_read: u64,
+    /// Total event entries decoded so far.
+    pub entries: usize,
+    /// Number of .postcard files found.
+    pub files: usize,
+}
 
 fn coordinator_record_to_snapshot(rec: CoordinatorRecord) -> CoordinatorStateSnapshot {
     CoordinatorStateSnapshot {
@@ -68,13 +86,29 @@ struct LiveSource {
     file_positions: HashMap<PathBuf, u64>,
 }
 
+/// Per-node first and last event timestamps.
+#[derive(Debug, Clone)]
+pub struct NodeTimestampRange {
+    pub first: DateTime<Utc>,
+    pub last: DateTime<Utc>,
+}
+
 pub struct ClusterTimeline {
     entries: Vec<TimelineEntry>,
     /// Snapshot materialized BEFORE applying the entry at `idx`.
     /// Stored every CHECKPOINT_INTERVAL entries for O(sqrt N) scrub.
     checkpoints: Vec<(usize, ClusterSnapshot)>,
+    /// The projection state after applying ALL entries — used for incremental
+    /// checkpoint building so we never replay the entire history.
+    tail_projection: ClusterProjection,
     /// Present when the timeline was created from a directory; enables `refresh()`.
     live_source: Option<LiveSource>,
+    /// Cached entity IDs in order of first appearance; invalidated on refresh.
+    cached_entity_ids: Vec<String>,
+    /// Set used to maintain `cached_entity_ids` incrementally.
+    seen_entity_ids: HashSet<String>,
+    /// Per-node timestamp range (first event, last event), maintained incrementally.
+    node_timestamp_ranges: IndexMap<String, NodeTimestampRange>,
 }
 
 impl ClusterTimeline {
@@ -82,15 +116,38 @@ impl ClusterTimeline {
         Self {
             entries: Vec::new(),
             checkpoints: Vec::new(),
+            tail_projection: ClusterProjection::new(),
             live_source: None,
+            cached_entity_ids: Vec::new(),
+            seen_entity_ids: HashSet::new(),
+            node_timestamp_ranges: IndexMap::new(),
         }
     }
 
     /// Scan all .postcard files under `dir` (recursing into node_id subdirs),
     /// decode events, sort by timestamp, and track file positions for live refresh.
     pub fn from_events_dir(dir: &Path) -> io::Result<Self> {
-        let mut file_positions: HashMap<PathBuf, u64> = HashMap::new();
-        let mut raw_entries: Vec<TimelineEntry> = Vec::new();
+        Self::from_events_dir_with_progress(dir, |_| {})
+    }
+
+    /// Like [`from_events_dir`](Self::from_events_dir) but calls `progress` periodically
+    /// so the caller can render a loading indicator.
+    pub fn from_events_dir_with_progress(
+        dir: &Path,
+        mut progress: impl FnMut(&LoadProgress),
+    ) -> io::Result<Self> {
+        let mut p = LoadProgress {
+            phase: "scanning",
+            fraction: 0.0,
+            total_bytes: 0,
+            bytes_read: 0,
+            entries: 0,
+            files: 0,
+        };
+
+        // ── Phase 0: scan directory, count total bytes ───────────────────
+        progress(&p);
+        let mut all_files: Vec<(PathBuf, String, bool)> = Vec::new();
 
         for dir_entry in std::fs::read_dir(dir)? {
             let dir_entry = dir_entry?;
@@ -98,17 +155,13 @@ impl ClusterTimeline {
             if !node_dir.is_dir() {
                 continue;
             }
-
             let node_id = node_dir
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
 
-            // The coordinator subdir uses a different record type — handled below.
-            if node_id == COORDINATOR_SUBDIR {
-                continue;
-            }
+            let is_coord = node_id == COORDINATOR_SUBDIR;
 
             let mut postcard_files: Vec<PathBuf> = std::fs::read_dir(&node_dir)?
                 .filter_map(|e| e.ok())
@@ -118,37 +171,27 @@ impl ClusterTimeline {
             postcard_files.sort();
 
             for file_path in postcard_files {
-                let data = std::fs::read(&file_path)?;
-                let mut cursor = 0;
-                while cursor < data.len() {
-                    match try_decode_cobs_frame::<Event>(&data, &mut cursor) {
-                        Some(event) => {
-                            raw_entries.push(TimelineEntry::Node {
-                                timestamp: event.timestamp,
-                                node_id: node_id.clone(),
-                                event,
-                            });
-                        }
-                        None => break,
-                    }
+                if let Ok(meta) = std::fs::metadata(&file_path) {
+                    p.total_bytes += meta.len();
                 }
-                file_positions.insert(file_path, cursor as u64);
+                p.files += 1;
+                all_files.push((file_path, node_id.clone(), is_coord));
             }
         }
+        progress(&p);
 
-        // Scan coordinator subdirectory for CoordinatorRecord frames.
-        let coordinator_dir = dir.join(COORDINATOR_SUBDIR);
-        if coordinator_dir.is_dir() {
-            let mut postcard_files: Vec<PathBuf> = std::fs::read_dir(&coordinator_dir)?
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "postcard"))
-                .collect();
-            postcard_files.sort();
+        // ── Phase 1: read & decode ───────────────────────────────────────
+        p.phase = "reading";
+        p.fraction = 0.0;
+        let mut file_positions: HashMap<PathBuf, u64> = HashMap::new();
+        let mut raw_entries: Vec<TimelineEntry> = Vec::new();
 
-            for file_path in postcard_files {
-                let data = std::fs::read(&file_path)?;
-                let mut cursor = 0;
+        for (file_path, node_id, is_coord) in &all_files {
+            let data = std::fs::read(file_path)?;
+            let file_len = data.len() as u64;
+            let mut cursor = 0;
+
+            if *is_coord {
                 while cursor < data.len() {
                     match try_decode_cobs_frame::<CoordinatorRecord>(&data, &mut cursor) {
                         Some(rec) => {
@@ -161,21 +204,58 @@ impl ClusterTimeline {
                         None => break,
                     }
                 }
-                file_positions.insert(file_path, cursor as u64);
+            } else {
+                while cursor < data.len() {
+                    match try_decode_cobs_frame::<Event>(&data, &mut cursor) {
+                        Some(event) => {
+                            raw_entries.push(TimelineEntry::Node {
+                                timestamp: event.timestamp,
+                                node_id: node_id.clone(),
+                                event,
+                            });
+                        }
+                        None => break,
+                    }
+                }
             }
+
+            file_positions.insert(file_path.clone(), cursor as u64);
+            p.bytes_read += file_len;
+            p.entries = raw_entries.len();
+            if p.total_bytes > 0 {
+                p.fraction = p.bytes_read as f32 / p.total_bytes as f32;
+            }
+            progress(&p);
         }
 
+        // ── Phase 2: sort ────────────────────────────────────────────────
+        p.phase = "sorting";
+        p.fraction = 0.0;
+        progress(&p);
         raw_entries.sort_by_key(|e| e.timestamp());
+        p.fraction = 1.0;
+        progress(&p);
 
+        // ── Phase 3: build checkpoints ───────────────────────────────────
+        let entry_count = raw_entries.len();
         let mut timeline = Self {
             entries: raw_entries,
             checkpoints: Vec::new(),
+            tail_projection: ClusterProjection::new(),
             live_source: Some(LiveSource {
                 dir: dir.to_path_buf(),
                 file_positions,
             }),
+            cached_entity_ids: Vec::new(),
+            seen_entity_ids: HashSet::new(),
+            node_timestamp_ranges: IndexMap::new(),
         };
-        timeline.rebuild_checkpoints();
+        timeline.rebuild_checkpoints_with_progress(entry_count, &mut p, &mut progress);
+        timeline.rebuild_entity_ids();
+        timeline.extend_timestamp_ranges(0);
+        p.phase = "ready";
+        p.fraction = 1.0;
+        progress(&p);
         Ok(timeline)
     }
 
@@ -326,37 +406,145 @@ impl ClusterTimeline {
             return Ok(false);
         }
 
+        // Sort new entries, then merge into the existing (already-sorted) entries.
+        new_entries.sort_by_key(|e| e.timestamp());
+
+        if new_entries
+            .first()
+            .map(|e| e.timestamp())
+            .unwrap_or_default()
+            < self
+                .entries
+                .last()
+                .map(|e| e.timestamp())
+                .unwrap_or_default()
+        {
+            unimplemented!("a new event is older than the previously newest event! ");
+        }
+        let append_start = self.entries.len();
         self.entries.extend(new_entries);
-        // Stable sort preserves existing order for entries with equal timestamps.
-        self.entries.sort_by_key(|e| e.timestamp());
-        self.rebuild_checkpoints();
+        self.extend_checkpoints(append_start);
+        self.extend_entity_ids(append_start);
+        self.extend_timestamp_ranges(append_start);
         Ok(true)
     }
 
     pub fn push_coordinator(&mut self, state: CoordinatorStateSnapshot) {
         let timestamp = state.timestamp;
+        let append_start = self.entries.len();
         self.entries
             .push(TimelineEntry::Coordinator { timestamp, state });
-        self.rebuild_checkpoints();
+        self.extend_checkpoints(append_start);
+        // "coordinator" is always present; update entity cache.
+        if self.seen_entity_ids.insert("coordinator".to_string()) {
+            self.cached_entity_ids.push("coordinator".to_string());
+        }
     }
 
-    /// Rebuild the materialized checkpoint index.
-    /// Checkpoint at position i stores the projection state BEFORE applying entries[i].
-    fn rebuild_checkpoints(&mut self) {
+    /// Rebuild the materialized checkpoint index from scratch.
+    /// Only used on initial load.
+    fn rebuild_checkpoints_with_progress(
+        &mut self,
+        total_hint: usize,
+        p: &mut LoadProgress,
+        progress: &mut impl FnMut(&LoadProgress),
+    ) {
         self.checkpoints.clear();
-        let mut proj = ClusterProjection::new();
+        self.tail_projection = ClusterProjection::new();
+        let total = if total_hint > 0 {
+            total_hint
+        } else {
+            self.entries.len()
+        };
+        let report_every = (total / 100).max(1);
+
+        p.phase = "indexing";
+        p.fraction = 0.0;
+        progress(p);
 
         for (idx, entry) in self.entries.iter().enumerate() {
             if idx % CHECKPOINT_INTERVAL == 0 {
-                self.checkpoints.push((idx, proj.snapshot().clone()));
+                self.checkpoints
+                    .push((idx, self.tail_projection.snapshot().clone()));
             }
-            match entry {
-                TimelineEntry::Node { node_id, event, .. } => {
-                    proj.apply_node_event(node_id, event);
-                }
-                TimelineEntry::Coordinator { state, .. } => {
-                    proj.apply_coordinator(state.clone());
-                }
+            Self::apply_entry(&mut self.tail_projection, entry);
+            if total > 0 && idx % report_every == 0 {
+                p.fraction = idx as f32 / total as f32;
+                progress(p);
+            }
+        }
+    }
+
+    /// Incrementally extend checkpoints for entries appended at `start_idx..`.
+    /// Reuses `tail_projection` which already has all entries before `start_idx` applied.
+    fn extend_checkpoints(&mut self, start_idx: usize) {
+        for idx in start_idx..self.entries.len() {
+            if idx % CHECKPOINT_INTERVAL == 0 {
+                self.checkpoints
+                    .push((idx, self.tail_projection.snapshot().clone()));
+            }
+            Self::apply_entry(&mut self.tail_projection, &self.entries[idx]);
+        }
+    }
+
+    fn apply_entry(proj: &mut ClusterProjection, entry: &TimelineEntry) {
+        match entry {
+            TimelineEntry::Node { node_id, event, .. } => {
+                proj.apply_node_event(node_id, event);
+            }
+            TimelineEntry::Coordinator { state, .. } => {
+                proj.apply_coordinator(state.clone());
+            }
+        }
+    }
+
+    /// Rebuild the entity ID cache from scratch (used on initial load).
+    fn rebuild_entity_ids(&mut self) {
+        self.seen_entity_ids.clear();
+        self.cached_entity_ids.clear();
+        self.extend_entity_ids(0);
+    }
+
+    /// Incrementally update per-node timestamp ranges for entries at `start_idx..`.
+    fn extend_timestamp_ranges(&mut self, start_idx: usize) {
+        for entry in &self.entries[start_idx..] {
+            let (id, ts) = match entry {
+                TimelineEntry::Node {
+                    node_id, timestamp, ..
+                } => (node_id.clone(), *timestamp),
+                TimelineEntry::Coordinator { .. } => continue,
+            };
+            self.node_timestamp_ranges
+                .entry(id)
+                .and_modify(|r| {
+                    if ts < r.first {
+                        r.first = ts;
+                    }
+                    if ts > r.last {
+                        r.last = ts;
+                    }
+                })
+                .or_insert(NodeTimestampRange {
+                    first: ts,
+                    last: ts,
+                });
+        }
+    }
+
+    /// Per-node first/last event timestamps.
+    pub fn node_timestamp_ranges(&self) -> &IndexMap<String, NodeTimestampRange> {
+        &self.node_timestamp_ranges
+    }
+
+    /// Incrementally update entity ID cache for entries appended at `start_idx..`.
+    fn extend_entity_ids(&mut self, start_idx: usize) {
+        for entry in &self.entries[start_idx..] {
+            let id = match entry {
+                TimelineEntry::Node { node_id, .. } => node_id.clone(),
+                TimelineEntry::Coordinator { .. } => "coordinator".to_string(),
+            };
+            if self.seen_entity_ids.insert(id.clone()) {
+                self.cached_entity_ids.push(id);
             }
         }
     }
@@ -406,16 +594,9 @@ impl ClusterTimeline {
     }
 
     /// All entity IDs that appear anywhere in the timeline, in order of first appearance.
-    pub fn all_entity_ids(&self) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
-        self.entries
-            .iter()
-            .map(|e| match e {
-                TimelineEntry::Node { node_id, .. } => node_id.clone(),
-                TimelineEntry::Coordinator { .. } => "coordinator".to_string(),
-            })
-            .filter(|id| seen.insert(id.clone()))
-            .collect()
+    /// Returns a reference to the cached list — O(1).
+    pub fn all_entity_ids(&self) -> &[String] {
+        &self.cached_entity_ids
     }
 
     pub fn timestamp_range(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {

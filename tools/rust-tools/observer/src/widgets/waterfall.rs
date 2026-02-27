@@ -222,18 +222,24 @@ impl<'a> Widget for WaterfallWidget<'a> {
             Style::default().fg(Color::DarkGray),
         );
 
-        // Pre-scan from the beginning up to win_end to find the training step
-        // at each slot. We track the most recent coordinator step seen so far.
+        // Find the training step at each slot in the visible window.
+        // First, scan backwards from win_start to find the most recent coordinator
+        // step before the window, then scan forward only within the window.
         let step_at_slot: Vec<Option<u64>> = {
             let mut cur: Option<u64> = None;
+            // Find the last coordinator entry before win_start by scanning backwards.
+            for i in (0..win_start).rev() {
+                if let TimelineEntry::Coordinator { state, .. } = &entries[i] {
+                    cur = Some(state.step);
+                    break;
+                }
+            }
             let mut out = vec![None; win_size];
-            for (i, entry) in entries.iter().enumerate().take(win_end) {
-                if let TimelineEntry::Coordinator { state, .. } = entry {
+            for i in win_start..win_end {
+                if let TimelineEntry::Coordinator { state, .. } = &entries[i] {
                     cur = Some(state.step);
                 }
-                if i >= win_start {
-                    out[i - win_start] = cur;
-                }
+                out[i - win_start] = cur;
             }
             out
         };

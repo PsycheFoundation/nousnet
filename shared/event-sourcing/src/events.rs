@@ -14,6 +14,16 @@ pub enum SubscriptionStatus {
     Down,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
+pub enum RpcCallType {
+    Witness,
+    WarmupWitness,
+    HealthCheck,
+    Checkpoint,
+    Join,
+    Tick,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub timestamp: DateTime<Utc>,
@@ -83,8 +93,14 @@ pub enum Coordinator {
         url: String,
         status: SubscriptionStatus,
     },
-    // TODO: we submitted an RPC call
-    // TODO: rpc call success/fail
+    #[display("rpc submitted: {call_type}")]
+    RpcCallSubmitted { call_type: RpcCallType },
+    #[display("rpc result: {call_type} success={success}")]
+    RpcCallResult {
+        call_type: RpcCallType,
+        success: bool,
+        error_string: Option<String>,
+    },
 }
 
 #[first_class_variants(

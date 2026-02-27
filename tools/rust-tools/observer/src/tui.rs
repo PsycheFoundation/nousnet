@@ -99,7 +99,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                 };
                 f.render_widget(
                     NodeListWidget {
-                        node_ids: &all_node_ids,
+                        node_ids: all_node_ids,
                         selected_node_idx: selected,
                         node_scroll,
                         focused: focused_box == FocusedBox::NodeList,
@@ -167,7 +167,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                         WaterfallWidget {
                             timeline,
                             cursor,
-                            node_ids: &all_node_ids,
+                            node_ids: all_node_ids,
                             selected_node_idx: selected,
                             node_scroll,
                             zoom: waterfall_zoom,
