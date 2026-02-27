@@ -34,7 +34,7 @@ use tracing::{debug, error, info};
 
 #[derive(Parser, Debug)]
 struct Args {
-    #[arg(long, default_value = "127.0.0.1:8000")]
+    #[arg(long, default_value = "0.0.0.0:8000")]
     listen_addr: String,
 
     /// what discovery to use - public n0 or local
