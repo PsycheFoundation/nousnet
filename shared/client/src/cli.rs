@@ -1,7 +1,9 @@
 use crate::{CheckpointConfig, WandBInfo};
 
+use crate::UploadInfo;
 use anyhow::{Result, anyhow, bail};
 use clap::Args;
+use psyche_data_provider::{GcsUploadInfo, HubUploadInfo};
 use psyche_eval::tasktype_from_name;
 use psyche_modeling::Devices;
 use psyche_network::{DiscoveryMode, RelayKind, SecretKey};
@@ -143,6 +145,14 @@ pub struct TrainArgs {
     #[clap(long, env, default_value_os_t = default_checkpoint_dir())]
     pub checkpoint_dir: PathBuf,
 
+    /// Name of the GCS bucket containing model data and configuration.
+    #[clap(long, env)]
+    pub gcs_bucket: Option<String>,
+
+    /// Prefix within the GCS bucket for model data and configuration.
+    #[clap(long, env)]
+    pub gcs_prefix: Option<String>,
+
     #[clap(long, env, default_value_t = 3)]
     pub hub_max_concurrent_downloads: usize,
 
@@ -170,7 +180,7 @@ pub struct TrainArgs {
     #[clap(long, env)]
     pub dummy_training_delay_secs: Option<u64>,
 
-    #[clap(long, default_value_t = 4, env)]
+    #[clap(long, default_value_t = 8, env)]
     pub max_concurrent_parameter_requests: usize,
 
     #[clap(long, default_value_t = 4, env)]

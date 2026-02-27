@@ -27,7 +27,8 @@ use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
 };
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::error;
+use tracing::{Instrument, info, info_span, warn};
 
 use super::{
     CheckpointConfig,

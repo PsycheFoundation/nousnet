@@ -19,7 +19,7 @@ use anchor_client::{
 };
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use psyche_coordinator::model::Checkpoint;
+use psyche_coordinator::model::{self, Checkpoint};
 use psyche_coordinator::{CommitteeProof, Coordinator, HealthChecks};
 use psyche_core::IntegrationTestLogMarker;
 use psyche_watcher::{Backend as WatcherBackend, OpportunisticData};
@@ -60,7 +60,7 @@ async fn subscribe_to_account(
     let mut retries: u64 = 0;
     loop {
         // wait a time before we try a reconnection
-        let sleep_time = min(600, retries.saturating_mul(5));
+        let sleep_time = min(30, retries.saturating_mul(2));
         tokio::time::sleep(Duration::from_secs(sleep_time)).await;
         retries += 1;
         let Ok(sub_client) = PubsubClient::new(&url).await else {
@@ -452,6 +452,11 @@ impl SolanaBackend {
 
     pub fn get_payer(&self) -> Pubkey {
         self.wallet.pubkey()
+    }
+
+    pub fn sign_message(&self, message: &[u8]) -> Vec<u8> {
+        use anchor_client::solana_sdk::signature::Signer;
+        self.wallet.sign_message(message).as_ref().to_vec()
     }
 
     pub fn get_commitment_config(&self) -> CommitmentConfig {

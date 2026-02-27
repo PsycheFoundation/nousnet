@@ -2,6 +2,8 @@ use anyhow::{Error, Result};
 use bytemuck::Zeroable;
 use google_cloud_storage::client::Storage;
 use psyche_centralized_shared::{ClientId, ClientToServerMessage, ServerToClientMessage};
+use psyche_client::HubUploadInfo;
+use psyche_client::UploadInfo;
 use psyche_client::{
     Client, ClientTUI, ClientTUIState, NC, RunInitConfig, TrainArgs, UploadCredentials,
     read_identity_secret_key,

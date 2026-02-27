@@ -4,6 +4,8 @@ use hf_hub::{
     Cache, Repo, RepoType,
     api::{Siblings, tokio::ApiError},
 };
+use psyche_coordinator::model;
+use psyche_core::FixedString;
 use std::{path::PathBuf, time::Instant};
 use tracing::{error, info};
 
