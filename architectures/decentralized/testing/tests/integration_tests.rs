@@ -1112,8 +1112,11 @@ async fn test_pause_and_resume_run() {
                 if paused && !client_killed && new_state == RunState::Paused.to_string() {
                     println!("Coordinator is in Paused state. Killing client and resuming...");
 
-                    // Kill the old container
-                    watcher.kill_container(&container).await.unwrap();
+                    // Kill the old container (may already be stopped if cooldown
+                    // race occurred and client exited during the wait)
+                    if let Err(e) = watcher.kill_container(&container).await {
+                        println!("Container {container} already stopped: {e}. Proceeding.");
+                    }
                     client_killed = true;
 
                     // Wait a moment for cleanup
