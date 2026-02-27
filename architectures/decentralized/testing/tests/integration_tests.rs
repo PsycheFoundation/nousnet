@@ -346,10 +346,15 @@ async fn disconnect_client() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // Initialize a Solana run with 3 clients
-    // Use warmup_time=150 to give all 3 clients enough time to load model on CI
+    // warmup_time=150: give all 3 clients enough time to load model on CI
+    // max_round_train_time=180: after killing a client, gossip disruption causes
+    //   surviving clients to need extra time completing the round
+    // epoch_time=300: enough time for multiple rounds with slow gossip recovery
     let config = ConfigBuilder::new()
         .with_num_clients(3)
-        .with_warmup_time(150);
+        .with_warmup_time(150)
+        .with_max_round_train_time(180)
+        .with_epoch_time(300);
     let _cleanup = e2e_testing_setup_with_config(docker.clone(), 3, config, None).await;
 
     let _monitor_client_1 = watcher
