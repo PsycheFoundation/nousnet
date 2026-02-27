@@ -349,13 +349,13 @@ async fn disconnect_client() {
     // On CI (2 vCPUs), starting all 3 simultaneously causes resource starvation
     // where the 3rd client can't complete model loading during warmup.
     // Sequential spawning with delays lets each client load without contention.
-    // warmup_time=250: enough time after the 3rd client joins for all to be ready
+    // warmup_time=200: enough time after the 3rd client joins for all to be ready
     // max_round_train_time=180: after killing a client, gossip disruption causes
     //   surviving clients to need extra time completing the round
     // epoch_time=300: enough time for multiple rounds with slow gossip recovery
     let config = ConfigBuilder::new()
         .with_num_clients(3)
-        .with_warmup_time(250)
+        .with_warmup_time(200)
         .with_max_round_train_time(180)
         .with_epoch_time(300);
     let _cleanup = e2e_testing_setup_with_config(docker.clone(), 0, config, None).await;
@@ -376,7 +376,7 @@ async fn disconnect_client() {
         .unwrap();
     println!("Spawned client 1: {container_1}");
 
-    tokio::time::sleep(Duration::from_secs(60)).await;
+    tokio::time::sleep(Duration::from_secs(30)).await;
 
     let container_2 = spawn_new_client(docker.clone(), None).await.unwrap();
     let _monitor_client_2 = watcher
@@ -393,7 +393,7 @@ async fn disconnect_client() {
         .unwrap();
     println!("Spawned client 2: {container_2}");
 
-    tokio::time::sleep(Duration::from_secs(60)).await;
+    tokio::time::sleep(Duration::from_secs(30)).await;
 
     let container_3 = spawn_new_client(docker.clone(), None).await.unwrap();
     let _monitor_client_3 = watcher

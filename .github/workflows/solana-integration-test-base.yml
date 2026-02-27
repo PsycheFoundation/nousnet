@@ -11,7 +11,7 @@ on:
 jobs:
   solana-integration-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
