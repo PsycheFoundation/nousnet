@@ -8,8 +8,9 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anchor_client::solana_sdk::signature::{Keypair, Signer};
-use bollard::container::StartContainerOptions;
+use bollard::container::{LogsOptions, StartContainerOptions};
 use bollard::{Docker, container::KillContainerOptions};
+use futures_util::StreamExt;
 use psyche_coordinator::{RunState, model::Checkpoint};
 use psyche_core::IntegrationTestLogMarker;
 use psyche_decentralized_testing::docker_setup::e2e_testing_setup_subscription;
@@ -26,6 +27,29 @@ use psyche_decentralized_testing::{
 use rstest::*;
 use serial_test::serial;
 use tokio::time;
+
+async fn dump_all_client_logs(docker: &Docker, num_clients: u8) {
+    for i in 1..=num_clients {
+        let container = format!("{CLIENT_CONTAINER_PREFIX}-{i}");
+        let opts = Some(LogsOptions::<String> {
+            stderr: true,
+            stdout: true,
+            follow: false,
+            tail: "200".to_string(),
+            ..Default::default()
+        });
+        let mut logs = docker.logs(&container, opts);
+        let mut lines = Vec::new();
+        while let Some(Ok(log)) = logs.next().await {
+            lines.push(log.to_string());
+        }
+        println!("========== [{container}] logs at Warmup ==========");
+        for line in &lines {
+            println!("{line}");
+        }
+        println!("========== end [{container}] ==========");
+    }
+}
 
 /// spawn 1 clients and run for 3 epochs
 /// assert client and coordinator state synchronization
@@ -77,6 +101,9 @@ async fn test_one_clients_three_epochs_run() {
                         println!(
                             "client: new_state: {new_state}, old_state: {old_state}, timestamp: {timestamp}"
                         );
+                        if new_state == RunState::Warmup.to_string() {
+                            dump_all_client_logs(&docker, 1).await;
+                        }
                     }
                     Some(Response::Loss(client, epoch, step, loss)) => {
                         println!(
@@ -165,6 +192,9 @@ async fn test_two_clients_three_epochs_run() {
                         println!(
                             "client: new_state: {new_state}, old_state: {old_state}, timestamp: {timestamp}"
                         );
+                        if new_state == RunState::Warmup.to_string() {
+                            dump_all_client_logs(&docker, 2).await;
+                        }
                     }
                     Some(Response::Loss(client, epoch, step, loss)) => {
                         println!(
@@ -387,6 +417,10 @@ async fn disconnect_client() {
                     "epoch: {epoch} step: {step} state change client {client_id} - {old_state} => {new_state}"
                 );
 
+                if new_state == RunState::Warmup.to_string() {
+                    dump_all_client_logs(&docker, 3).await;
+                }
+
                 if step == 20 {
                     println!("Max number of epochs reached for test");
                     break;
@@ -516,6 +550,10 @@ async fn drop_a_client_waitingformembers_then_reconnect() {
             Response::StateChange(_timestamp, client, old_state, new_state, _epoch, _step) => {
                 let coordinator_state = solana_client.get_run_state().await;
                 println!("state change client {client} - {old_state}=>{new_state}");
+
+                if new_state == RunState::Warmup.to_string() {
+                    dump_all_client_logs(&docker, 2).await;
+                }
 
                 // Once warmup starts, kill client 2's container
                 if new_state == RunState::RoundTrain.to_string() && !train_reached {
@@ -718,6 +756,10 @@ async fn test_solana_subscriptions() {
             response = watcher.log_rx.recv() => {
                 match response {
                     Some(Response::StateChange(_timestamp, _client_1, old_state, new_state, epoch , step)) => {
+                        if new_state == RunState::Warmup.to_string() {
+                            dump_all_client_logs(&docker, 2).await;
+                        }
+
                         if old_state == RunState::WaitingForMembers.to_string() {
                             println!(
                                 "Starting epoch: {epoch}",
@@ -842,6 +884,10 @@ async fn test_everybody_leaves_in_warmup() {
         if let Response::StateChange(_timestamp, _client_id, old_state, new_state, ..) = response {
             println!("Changing from {old_state} to {new_state}");
 
+            if new_state == RunState::Warmup.to_string() {
+                dump_all_client_logs(&docker, 1).await;
+            }
+
             if old_state == RunState::WaitingForMembers.to_string()
                 && new_state == RunState::Warmup.to_string()
             {
@@ -864,6 +910,10 @@ async fn test_everybody_leaves_in_warmup() {
     while let Some(response) = watcher.log_rx.recv().await {
         if let Response::StateChange(_timestamp, _client_id, old_state, new_state, ..) = response {
             println!("Changing from {old_state} to {new_state}");
+
+            if new_state == RunState::Warmup.to_string() {
+                dump_all_client_logs(&docker, 1).await;
+            }
 
             if old_state == RunState::RoundWitness.to_string()
                 && new_state == RunState::Cooldown.to_string()
@@ -916,6 +966,10 @@ async fn test_lost_only_peer_go_back_to_hub_checkpoint() {
                             println!(
                                 "step={step} -- state change for client {client_id}: {old_state} => {new_state}"
                             );
+                        }
+
+                        if new_state == RunState::Warmup.to_string() {
+                            dump_all_client_logs(&docker, 2).await;
                         }
 
                         if new_state == RunState::RoundTrain.to_string() && !spawned_second_client {
@@ -1028,6 +1082,10 @@ async fn test_pause_and_resume_run() {
         match response {
             Some(Response::StateChange(_timestamp, _client, old_state, new_state, epoch, step)) => {
                 println!("epoch: {epoch} step: {step} state change: {old_state} => {new_state}");
+
+                if new_state == RunState::Warmup.to_string() {
+                    dump_all_client_logs(&docker, 1).await;
+                }
 
                 // Wait until step 5 before pausing
                 if !paused && step >= 5 && new_state == RunState::RoundTrain.to_string() {
