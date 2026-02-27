@@ -839,15 +839,6 @@ async fn run_gateway() -> Result<()> {
                         }
                     }
 
-                    Some(gossip_msg) = gossip_rx.recv() => {
-                        info!("Broadcasting gossip message: {:?}", gossip_msg);
-                        if let Err(e) = network.broadcast(&gossip_msg) {
-                            error!("Failed to broadcast gossip message: {:#}", e);
-                        } else {
-                            info!("Successfully broadcasted gossip message");
-                        }
-                    }
-
                     event = network.poll_next() => {
                         match event {
                             Ok(Some(NetworkEvent::MessageReceived((peer_id, msg)))) => {
