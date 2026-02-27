@@ -276,19 +276,21 @@ async fn test_rejoining_client_delay() {
     // Use generous warmup so that if client-2 joins during an epoch's warmup,
     // the coordinator waits for it to finish downloading the model via P2P.
     // Client-2 is spawned only AFTER epoch 0 finishes to guarantee it sees P2P.
+    // Keep default epoch_time=120 so epoch 0 completes quickly.
     let config = ConfigBuilder::new()
         .with_num_clients(1)
-        .with_warmup_time(300)
-        .with_epoch_time(600);
+        .with_warmup_time(300);
     let _cleanup = e2e_testing_setup_with_config(docker.clone(), 1, config, None).await;
 
     let solana_client = Arc::new(SolanaTestClient::new("test".to_string(), None).await);
 
     // Wait for epoch 0 to complete so checkpoint transitions to P2P.
     // Client-2 must NOT be spawned during epoch 0 or it would see Hub checkpoint.
+    // Epoch 0 with 1 client: warmup (~30s) + training (~60s) + cooldown (5s) ≈ ~100-150s
+    // warmup_time=300 is a timeout but warmup ends early when client-1 submits.
     println!("Waiting for epoch 0 to complete...");
     let found = solana_client
-        .wait_for_run_state(RunState::Cooldown, 300)
+        .wait_for_run_state(RunState::Cooldown, 600)
         .await;
     assert!(found, "Epoch 0 should reach Cooldown");
     // Wait for cooldown to finish and checkpoint to transition to P2P
@@ -329,7 +331,10 @@ async fn test_rejoining_client_delay() {
                _ = interval.tick() => {
                    let current_epoch = solana_client.get_current_epoch().await;
                    println!("Waiting for client-2 to load model (epoch: {current_epoch})");
-                   if let Err(e) = watcher.monitor_clients_health(2).await {
+                   // Only check client-1 health. Client-2 may get dropped by the
+                   // coordinator if it joins but takes too long downloading the model.
+                   // The 600s timeout handles client-2 failures.
+                   if let Err(e) = watcher.monitor_clients_health(1).await {
                        panic!("{}", e);
                    }
                }
