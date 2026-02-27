@@ -224,6 +224,7 @@ mod tests {
     #[test]
     fn test_load_model_message_serialization() {
         let msg = InferenceGossipMessage::LoadModel {
+            target_node_id: None,
             model_name: "gpt2".to_string(),
             model_source: ModelSource::HuggingFace("gpt2".to_string()),
         };
@@ -233,9 +234,11 @@ mod tests {
 
         match parsed {
             InferenceGossipMessage::LoadModel {
+                target_node_id,
                 model_name,
                 model_source,
             } => {
+                assert_eq!(target_node_id, None);
                 assert_eq!(model_name, "gpt2");
                 assert_eq!(model_source, ModelSource::HuggingFace("gpt2".to_string()));
             }

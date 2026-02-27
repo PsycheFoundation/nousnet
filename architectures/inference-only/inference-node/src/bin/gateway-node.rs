@@ -166,35 +166,6 @@ struct AssignmentInfo {
     status: String, // "loading", "loaded", "idle", "offline"
 }
 
-fn default_model_source_type() -> String {
-    "huggingface".to_string()
-}
-
-#[derive(serde::Serialize)]
-struct LoadModelResponse {
-    success: bool,
-    message: String,
-}
-
-#[derive(serde::Deserialize, Debug, Clone)]
-#[serde(tag = "source_type", rename_all = "lowercase")]
-enum LoadModelSource {
-    #[serde(rename = "huggingface")]
-    HuggingFace {
-        source_path: Option<String>,
-    },
-    Local {
-        source_path: String,
-    },
-}
-
-#[derive(serde::Deserialize)]
-struct LoadModelRequest {
-    model_name: String,
-    #[serde(flatten)]
-    source: LoadModelSource,
-}
-
 #[derive(serde::Serialize)]
 struct ChatCompletionChoice {
     index: usize,

@@ -155,9 +155,9 @@ async fn main() -> Result<()> {
                             InferenceGossipMessage::NodeUnavailable => {
                                 info!("Peer {} left the network", peer_id.fmt_short());
                             }
-                            InferenceGossipMessage::LoadModel { model_name, model_source } => {
-                                info!("LoadModel request from {}: {} ({:?})",
-                                      peer_id.fmt_short(), model_name, model_source);
+                            InferenceGossipMessage::LoadModel { target_node_id, model_name, model_source } => {
+                                info!("LoadModel request from {} (target: {:?}): {} ({:?})",
+                                      peer_id.fmt_short(), target_node_id.map(|id| id.fmt_short()), model_name, model_source);
                             }
                             InferenceGossipMessage::ReloadCheckpoint { checkpoint_id, checkpoint_source } => {
                                 info!("Checkpoint reload request from {}: {} ({})",
