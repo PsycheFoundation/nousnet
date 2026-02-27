@@ -349,13 +349,14 @@ async fn disconnect_client() {
     // On CI (2 vCPUs), starting all 3 simultaneously causes resource starvation
     // where the 3rd client can't complete model loading during warmup.
     // Sequential spawning with delays lets each client load without contention.
-    // warmup_time=200: enough time after the 3rd client joins for all to be ready
+    // warmup_time=300: the 3rd client spawns ~60s after the 1st, needs time to
+    //   download and load model on congested CI runner. 200s was not enough.
     // max_round_train_time=180: after killing a client, gossip disruption causes
     //   surviving clients to need extra time completing the round
     // epoch_time=300: enough time for multiple rounds with slow gossip recovery
     let config = ConfigBuilder::new()
         .with_num_clients(3)
-        .with_warmup_time(200)
+        .with_warmup_time(300)
         .with_max_round_train_time(180)
         .with_epoch_time(300);
     let _cleanup = e2e_testing_setup_with_config(docker.clone(), 0, config, None).await;
@@ -1092,6 +1093,19 @@ async fn test_pause_and_resume_run() {
                         .expect("Failed to pause run");
                     paused = true;
                     println!("Run paused! Waiting for Paused state...");
+                }
+
+                // Race condition: pause can coincide with epoch end, causing the
+                // coordinator to enter Cooldown instead of transitioning directly
+                // to Paused. When this happens, wait for cooldown_time to expire
+                // and re-trigger ticks via set_paused to advance the coordinator.
+                if paused && !client_killed && new_state == RunState::Cooldown.to_string() {
+                    println!("Cooldown during pause - re-triggering ticks to advance to Paused...");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    let _ = solana_client.set_paused(true).await;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let _ = solana_client.set_paused(true).await;
+                    println!("Re-triggered set_paused ticks after cooldown");
                 }
 
                 // When coordinator enters Paused state, kill client and resume
