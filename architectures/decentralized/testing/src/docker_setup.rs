@@ -7,6 +7,7 @@ use bollard::{
     models::DeviceRequest,
     secret::{ContainerSummary, HostConfig},
 };
+use psyche_coordinator::model::LLMTrainingDataLocation;
 use psyche_core::IntegrationTestLogMarker;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -56,12 +57,26 @@ impl Drop for DockerTestCleanup {
     }
 }
 
-/// FIXME: The config path must be relative to the compose file for now.
 pub async fn e2e_testing_setup(
     docker_client: Arc<Docker>,
     init_num_clients: usize,
 ) -> DockerTestCleanup {
-    e2e_testing_setup_with_min(docker_client, init_num_clients, init_num_clients, None).await
+    e2e_testing_setup_with_datasource(docker_client, init_num_clients, None).await
+}
+
+pub async fn e2e_testing_setup_with_datasource(
+    docker_client: Arc<Docker>,
+    init_num_clients: usize,
+    data_source: Option<Vec<LLMTrainingDataLocation>>,
+) -> DockerTestCleanup {
+    e2e_testing_setup_with_min(
+        docker_client,
+        init_num_clients,
+        init_num_clients,
+        data_source,
+        None,
+    )
+    .await
 }
 
 /// Setup with explicit min_clients value and optional owner keypair path.
@@ -71,11 +86,18 @@ pub async fn e2e_testing_setup_with_min(
     docker_client: Arc<Docker>,
     init_num_clients: usize,
     min_clients: usize,
+    data_source: Option<Vec<LLMTrainingDataLocation>>,
     owner_keypair_path: Option<&Path>,
 ) -> DockerTestCleanup {
     remove_old_client_containers(docker_client).await;
 
-    spawn_psyche_network_with_min(init_num_clients, min_clients, owner_keypair_path).unwrap();
+    spawn_psyche_network_with_min(
+        init_num_clients,
+        data_source,
+        min_clients,
+        owner_keypair_path,
+    )
+    .unwrap();
 
     spawn_ctrl_c_task();
 
@@ -85,17 +107,20 @@ pub async fn e2e_testing_setup_with_min(
 pub async fn e2e_testing_setup_rpc_fallback(
     docker_client: Arc<Docker>,
     init_num_clients: usize,
+    data_source: Option<Vec<LLMTrainingDataLocation>>,
 ) -> DockerTestCleanup {
     remove_old_client_containers(docker_client).await;
     #[cfg(not(feature = "python"))]
     let config_file_path = ConfigBuilder::new()
         .with_num_clients(init_num_clients)
+        .with_data_source(data_source)
         .build();
     #[cfg(feature = "python")]
     let config_file_path = ConfigBuilder::new()
         .with_num_clients(init_num_clients)
+        .with_data_source(data_source)
         .with_architecture("HfAuto")
-        .with_batch_size(8 * init_num_clients as u32)
+        .with_batch_size(8 * std::cmp::max(init_num_clients, 1) as u32)
         .build();
 
     println!("[+] Config file written to: {}", config_file_path.display());
@@ -269,24 +294,31 @@ pub async fn spawn_new_client_with_monitoring(
 }
 
 // Updated spawn function
-pub fn spawn_psyche_network(init_num_clients: usize) -> Result<(), DockerWatcherError> {
-    spawn_psyche_network_with_min(init_num_clients, init_num_clients, None)
+pub fn spawn_psyche_network(
+    init_num_clients: usize,
+    data_source: Option<Vec<LLMTrainingDataLocation>>,
+) -> Result<(), DockerWatcherError> {
+    spawn_psyche_network_with_min(init_num_clients, data_source, init_num_clients, None)
 }
 
 /// Spawn the psyche network with explicit min_clients and optional owner keypair.
 pub fn spawn_psyche_network_with_min(
     init_num_clients: usize,
+    data_source: Option<Vec<LLMTrainingDataLocation>>,
     min_clients: usize,
     owner_keypair_path: Option<&Path>,
 ) -> Result<(), DockerWatcherError> {
     #[cfg(not(feature = "python"))]
     let config_file_path = ConfigBuilder::new()
         .with_num_clients(init_num_clients)
+        .with_data_source(data_source)
         .with_min_clients(min_clients)
         .build();
+
     #[cfg(feature = "python")]
     let config_file_path = ConfigBuilder::new()
         .with_num_clients(init_num_clients)
+        .with_data_source(data_source)
         .with_min_clients(min_clients)
         .with_architecture("HfAuto")
         .with_batch_size(8 * std::cmp::max(init_num_clients, 1) as u32)
