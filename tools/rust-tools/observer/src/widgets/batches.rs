@@ -7,14 +7,14 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 pub struct BatchesWidget<'a> {
     pub snapshot: &'a ClusterSnapshot,
     /// Highlighted node — its rows are shown in a distinct colour.
     pub selected_node_id: Option<&'a str>,
-    /// Vertical scroll offset (in data rows, not counting headers).
+    /// Vertical scroll offset (in rendered lines).
     pub scroll: usize,
 }
 
@@ -28,7 +28,7 @@ fn short_id(id: &str) -> String {
     }
 }
 
-fn fmt_range(batch_id: &BatchId) -> String {
+fn fmt_batch_id(batch_id: &BatchId) -> String {
     let s = batch_id.0.start;
     let e = batch_id.0.end;
     if s == e {
@@ -38,7 +38,7 @@ fn fmt_range(batch_id: &BatchId) -> String {
     }
 }
 
-/// Build a sorted list of all non-trainer node IDs across the snapshot.
+/// Build a sorted list of all node IDs across the snapshot.
 /// The order is deterministic (alphabetical) so dots line up across rows.
 fn all_node_ids(snapshot: &ClusterSnapshot) -> Vec<String> {
     let mut ids: Vec<String> = snapshot.nodes.keys().cloned().collect();
@@ -83,65 +83,72 @@ fn check_char(ok: Option<bool>) -> (char, Color) {
 
 // ── per-row dot rendering ────────────────────────────────────────────────────
 
-const MAX_DOT_WIDTH: usize = 24;
-
-/// Render per-node dots for a batch row. Returns spans fitting within `max_w`.
-fn node_dots<'a>(batch: &ClusterBatchView, all_nodes: &[String], max_w: usize) -> Vec<Span<'a>> {
+/// Render per-node dots for a batch row into a string. Wraps at `wrap_w`.
+/// Returns lines of (char, Color) tuples.
+fn node_dot_lines(
+    batch: &ClusterBatchView,
+    all_nodes: &[String],
+    wrap_w: usize,
+) -> Vec<Vec<(char, Color)>> {
     let trainer = batch.assigned_to.as_deref();
-    let mut spans = Vec::new();
-    let mut count = 0;
-    let limit = max_w.min(MAX_DOT_WIDTH);
+    let mut chars: Vec<(char, Color)> = Vec::new();
 
     for node_id in all_nodes {
-        // Skip the trainer — they don't download their own result.
         if trainer == Some(node_id.as_str()) {
             continue;
-        }
-        if count >= limit {
-            spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
-            break;
         }
         let status = batch.node_status.get(node_id.as_str());
         let (ch, color) = match status {
             Some(s) => status_char(s),
             None => ('·', Color::DarkGray),
         };
-        spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-        count += 1;
+        chars.push((ch, color));
     }
-    spans
+
+    if chars.is_empty() || wrap_w == 0 {
+        return vec![chars];
+    }
+    chars.chunks(wrap_w).map(|c| c.to_vec()).collect()
 }
 
-/// Render per-node applied dots.
-fn applied_dots<'a>(
+/// Render per-node applied dots. Wraps at `wrap_w`.
+fn applied_dot_lines(
     batch: &ClusterBatchView,
     all_nodes: &[String],
     applied_by: &std::collections::HashSet<String>,
-    max_w: usize,
-) -> Vec<Span<'a>> {
+    wrap_w: usize,
+) -> Vec<Vec<(char, Color)>> {
     let trainer = batch.assigned_to.as_deref();
-    let mut spans = Vec::new();
-    let mut count = 0;
-    let limit = max_w.min(MAX_DOT_WIDTH);
+    let mut chars: Vec<(char, Color)> = Vec::new();
 
     for node_id in all_nodes {
         if trainer == Some(node_id.as_str()) {
             continue;
-        }
-        if count >= limit {
-            spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
-            break;
         }
         let (ch, color) = if applied_by.contains(node_id.as_str()) {
             ('✓', Color::Green)
         } else {
             ('·', Color::DarkGray)
         };
-        spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-        count += 1;
+        chars.push((ch, color));
     }
-    spans
+
+    if chars.is_empty() || wrap_w == 0 {
+        return vec![chars];
+    }
+    chars.chunks(wrap_w).map(|c| c.to_vec()).collect()
 }
+
+// ── column layout ────────────────────────────────────────────────────────────
+
+/// Fixed column widths: " BATCH_ID  NODE            DATA TRAIN "
+/// BATCH_ID column is 16 wide to fit ranges like "161064..161067".
+const COL_BATCH_ID: usize = 16;
+const COL_NODE: usize = 15;
+const COL_DATA: usize = 5;
+const COL_TRAIN: usize = 6;
+/// Total fixed prefix width including leading space and inter-column spaces.
+const PREFIX_W: usize = 1 + COL_BATCH_ID + 1 + COL_NODE + 1 + COL_DATA + COL_TRAIN;
 
 // ── section rendering ─────────────────────────────────────────────────────────
 
@@ -149,63 +156,77 @@ struct SectionCtx<'a> {
     all_nodes: &'a [String],
     selected_node_id: Option<&'a str>,
     applied_by: &'a std::collections::HashSet<String>,
-    inner: Rect,
-    scroll: usize,
 }
 
-/// Render one batch-table section (prev or current step). Returns rows consumed.
-fn render_section(
+/// Collect all rendered lines for one batch-table section (prev or current step).
+/// Returns a Vec of Lines.
+fn build_section_lines<'a>(
     label: &str,
     batches: &BTreeMap<BatchId, ClusterBatchView>,
-    ctx: &SectionCtx<'_>,
-    y: &mut u16,
-    buf: &mut Buffer,
-) {
-    let bottom = ctx.inner.y + ctx.inner.height;
-    if *y >= bottom || batches.is_empty() {
-        return;
+    ctx: &SectionCtx<'a>,
+    total_w: usize,
+) -> Vec<Line<'a>> {
+    if batches.is_empty() {
+        return Vec::new();
     }
 
-    let x = ctx.inner.x;
-    let w = ctx.inner.width as usize;
+    let mut lines: Vec<Line> = Vec::new();
 
     // Section label.
-    let label_area = Rect {
-        x,
-        y: *y,
-        width: ctx.inner.width,
-        height: 1,
-    };
-    Paragraph::new(Line::from(vec![
+    lines.push(Line::from(vec![
         Span::raw(" "),
-        Span::styled(label, Style::default().fg(Color::Cyan).bold()),
-    ]))
-    .render(label_area, buf);
-    *y += 1;
-    if *y >= bottom {
-        return;
-    }
+        Span::styled(label.to_string(), Style::default().fg(Color::Cyan).bold()),
+    ]));
 
-    // Column header.
-    // Layout: RANGE(12) NODE(15) DATA(5) TRAIN(6) NODES(...) APPLIED(...)
+    // Compute dot column widths.
+    let remaining = total_w.saturating_sub(PREFIX_W);
+    // Split remaining between NODES and APPLIED with a 1-char separator.
+    let dot_w = if remaining > 1 {
+        (remaining - 1) / 2
+    } else {
+        0
+    };
+    // Column header — align labels to center of their dot columns.
     let header_style = Style::default()
         .fg(Color::DarkGray)
         .add_modifier(Modifier::BOLD);
-    let hdr = " RANGE        NODE            DATA TRAIN NODES                    APPLIED";
-    let hdr_truncated: String = hdr.chars().take(w).collect();
-    buf.set_string(x, *y, &hdr_truncated, header_style);
-    *y += 1;
-    if *y >= bottom {
-        return;
+
+    let mut hdr = format!(
+        " {:<w_bid$} {:<w_node$} {:<w_data$}{:<w_train$}",
+        "BATCH ID",
+        "NODE",
+        "DATA",
+        "TRAIN",
+        w_bid = COL_BATCH_ID,
+        w_node = COL_NODE,
+        w_data = COL_DATA,
+        w_train = COL_TRAIN,
+    );
+    // Center "NODES" within dot_w
+    if dot_w > 0 {
+        let label_nodes = "NODES";
+        let pad_l = dot_w.saturating_sub(label_nodes.len()) / 2;
+        let pad_r = dot_w
+            .saturating_sub(label_nodes.len())
+            .saturating_sub(pad_l);
+        hdr.push_str(&" ".repeat(pad_l));
+        hdr.push_str(label_nodes);
+        hdr.push_str(&" ".repeat(pad_r));
+    }
+    hdr.push(' ');
+    // Center "APPLIED" within dot_w
+    if dot_w > 0 {
+        let label_applied = "APPLIED";
+        let pad_l = dot_w.saturating_sub(label_applied.len()) / 2;
+        hdr.push_str(&" ".repeat(pad_l));
+        hdr.push_str(label_applied);
     }
 
-    // Data rows.
-    let available = (bottom - *y) as usize;
-    for (batch_id, batch) in batches.iter().skip(ctx.scroll).take(available) {
-        if *y >= bottom {
-            break;
-        }
+    let hdr_truncated: String = hdr.chars().take(total_w).collect();
+    lines.push(Line::from(Span::styled(hdr_truncated, header_style)));
 
+    // Data rows.
+    for (batch_id, batch) in batches.iter() {
         let is_mine = ctx
             .selected_node_id
             .is_some_and(|sel| batch.assigned_to.as_deref() == Some(sel));
@@ -215,7 +236,7 @@ fn render_section(
             Style::default()
         };
 
-        let range = fmt_range(batch_id);
+        let bid = fmt_batch_id(batch_id);
         let assigned = batch
             .assigned_to
             .as_deref()
@@ -229,75 +250,83 @@ fn render_section(
             ('—', Color::DarkGray)
         };
 
-        // Build the line as spans.
-        let mut spans: Vec<Span> = Vec::new();
-        spans.push(Span::styled(format!(" {:<12} ", range), row_style));
-        spans.push(Span::styled(format!("{:<15} ", assigned), row_style));
-        spans.push(Span::styled(
-            format!(" {data_ch}  "),
-            Style::default().fg(data_color),
-        ));
-        spans.push(Span::styled(
-            format!("  {train_ch}   "),
-            Style::default().fg(train_color),
-        ));
+        let wrap_w = if dot_w > 0 { dot_w } else { 1 };
+        let node_lines = node_dot_lines(batch, ctx.all_nodes, wrap_w);
+        let app_lines = applied_dot_lines(batch, ctx.all_nodes, ctx.applied_by, wrap_w);
+        let num_rows = node_lines.len().max(app_lines.len()).max(1);
 
-        // Compute available width for dot columns.
-        // Fixed prefix width: 1 + 12 + 1 + 15 + 1 + 4 + 6 = ~40 chars.
-        let prefix_w = 40;
-        let remaining = w.saturating_sub(prefix_w);
-        let dot_w = remaining / 2;
+        for row_i in 0..num_rows {
+            let mut spans: Vec<Span> = Vec::new();
 
-        spans.extend(node_dots(batch, ctx.all_nodes, dot_w));
+            if row_i == 0 {
+                // First line: show the fixed columns.
+                spans.push(Span::styled(
+                    format!(" {:<w$} ", bid, w = COL_BATCH_ID),
+                    row_style,
+                ));
+                spans.push(Span::styled(
+                    format!("{:<w$} ", assigned, w = COL_NODE),
+                    row_style,
+                ));
+                spans.push(Span::styled(
+                    format!(" {data_ch}   "),
+                    Style::default().fg(data_color),
+                ));
+                spans.push(Span::styled(
+                    format!(" {train_ch}   "),
+                    Style::default().fg(train_color),
+                ));
+            } else {
+                // Continuation line: pad the fixed columns.
+                spans.push(Span::raw(" ".repeat(PREFIX_W)));
+            }
 
-        // Pad to align APPLIED column.
-        let current_w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-        let applied_col = prefix_w + dot_w + 1;
-        if current_w < applied_col {
-            spans.push(Span::raw(" ".repeat(applied_col - current_w)));
+            // Node dots for this wrap line.
+            if let Some(dots) = node_lines.get(row_i) {
+                for &(ch, color) in dots {
+                    spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+                }
+                // Pad to dot_w.
+                let used = dots.len();
+                if used < dot_w {
+                    spans.push(Span::raw(" ".repeat(dot_w - used)));
+                }
+            } else {
+                spans.push(Span::raw(" ".repeat(dot_w)));
+            }
+
+            spans.push(Span::raw(" "));
+
+            // Applied dots for this wrap line.
+            if let Some(dots) = app_lines.get(row_i) {
+                for &(ch, color) in dots {
+                    spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+                }
+            }
+
+            lines.push(Line::from(spans));
         }
-
-        spans.extend(applied_dots(batch, ctx.all_nodes, ctx.applied_by, dot_w));
-
-        Paragraph::new(Line::from(spans)).render(
-            Rect {
-                x,
-                y: *y,
-                width: ctx.inner.width,
-                height: 1,
-            },
-            buf,
-        );
-        *y += 1;
     }
+
+    lines
 }
 
-fn render_witnesses(snapshot: &ClusterSnapshot, y: &mut u16, inner: Rect, buf: &mut Buffer) {
-    let bottom = inner.y + inner.height;
-    if snapshot.step_witnesses.is_empty() || *y >= bottom {
-        return;
+fn build_witness_lines<'a>(snapshot: &'a ClusterSnapshot) -> Vec<Line<'a>> {
+    if snapshot.step_witnesses.is_empty() {
+        return Vec::new();
     }
 
-    // Blank separator.
-    *y += 1;
-    if *y >= bottom {
-        return;
-    }
-
+    let mut lines: Vec<Line> = Vec::new();
     let step = snapshot.coordinator.as_ref().map(|c| c.step).unwrap_or(0);
     let label = format!("Witnesses (step {})", step);
-    buf.set_string(
-        inner.x + 1,
-        *y,
-        &label,
-        Style::default().fg(Color::Magenta).bold(),
-    );
-    *y += 1;
+
+    lines.push(Line::from("")); // blank separator
+    lines.push(Line::from(vec![
+        Span::raw(" "),
+        Span::styled(label, Style::default().fg(Color::Magenta).bold()),
+    ]));
 
     for (node_id, ws) in &snapshot.step_witnesses {
-        if *y >= bottom {
-            break;
-        }
         let id = short_id(node_id);
         let (sub_ch, sub_color) = if ws.submitted {
             ('✓', Color::Green)
@@ -311,34 +340,51 @@ fn render_witnesses(snapshot: &ClusterSnapshot, y: &mut u16, inner: Rect, buf: &
             Some(false) => ("rejected", Color::Red),
         };
 
-        let line = Line::from(vec![
+        lines.push(Line::from(vec![
             Span::raw(format!("  {:<15} ", id)),
             Span::styled(format!("{sub_ch}"), Style::default().fg(sub_color)),
             Span::raw(" submitted  "),
-            Span::styled(rpc_label, Style::default().fg(rpc_color)),
-        ]);
-        Paragraph::new(line).render(
-            Rect {
-                x: inner.x,
-                y: *y,
-                width: inner.width,
-                height: 1,
-            },
-            buf,
-        );
-        *y += 1;
+            Span::styled(rpc_label.to_string(), Style::default().fg(rpc_color)),
+        ]));
     }
+
+    lines
+}
+
+fn build_legend_lines<'a>() -> Vec<Line<'a>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" NODES: ", dim.add_modifier(Modifier::BOLD)),
+            Span::styled("·", Style::default().fg(Color::DarkGray)),
+            Span::styled(" waiting ", dim),
+            Span::styled("○", Style::default().fg(Color::Yellow)),
+            Span::styled(" gossip ", dim),
+            Span::styled("↓", Style::default().fg(Color::Cyan)),
+            Span::styled(" downloading ", dim),
+            Span::styled("◉", Style::default().fg(Color::Cyan)),
+            Span::styled(" downloaded ", dim),
+            Span::styled("●", Style::default().fg(Color::Green)),
+            Span::styled(" ready ", dim),
+            Span::styled("✗", Style::default().fg(Color::Red)),
+            Span::styled(" failed", dim),
+        ]),
+        Line::from(vec![
+            Span::styled(" APPLIED: ", dim.add_modifier(Modifier::BOLD)),
+            Span::styled("·", Style::default().fg(Color::DarkGray)),
+            Span::styled(" pending ", dim),
+            Span::styled("✓", Style::default().fg(Color::Green)),
+            Span::styled(" applied ", dim),
+        ]),
+    ]
 }
 
 // ── widget ────────────────────────────────────────────────────────────────────
 
 impl<'a> Widget for BatchesWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default().borders(Borders::ALL);
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        if inner.height < 3 {
+        if area.height < 3 || area.width < 10 {
             return;
         }
 
@@ -354,12 +400,12 @@ impl<'a> Widget for BatchesWidget<'a> {
                     .add_modifier(Modifier::ITALIC),
             ))
             .centered()
-            .render(inner, buf);
+            .render(area, buf);
             return;
         }
 
+        let w = area.width as usize;
         let all_nodes = all_node_ids(snap);
-        let mut y = inner.y;
 
         let prev_step = snap
             .coordinator
@@ -368,33 +414,61 @@ impl<'a> Widget for BatchesWidget<'a> {
             .unwrap_or(0);
         let curr_step = snap.coordinator.as_ref().map(|c| c.step).unwrap_or(0);
 
+        // Build all lines, then scroll and render.
+        let mut all_lines: Vec<Line> = Vec::new();
+
+        let ctx = SectionCtx {
+            all_nodes: &all_nodes,
+            selected_node_id: self.selected_node_id,
+            applied_by: &snap.prev_applied_by,
+        };
+
         if has_prev {
-            let label = format!("step {} (previous)", prev_step);
-            let ctx = SectionCtx {
-                all_nodes: &all_nodes,
-                selected_node_id: self.selected_node_id,
-                applied_by: &snap.prev_applied_by,
-                inner,
-                scroll: self.scroll,
-            };
-            render_section(&label, &snap.prev_step_batches, &ctx, &mut y, buf);
-            if y < inner.y + inner.height {
-                y += 1; // blank separator
-            }
+            all_lines.extend(build_section_lines(
+                &format!("step {} (previous)", prev_step),
+                &snap.prev_step_batches,
+                &ctx,
+                w,
+            ));
+            all_lines.push(Line::from("")); // blank separator
         }
         if has_curr {
-            let label = format!("step {} (current)", curr_step);
-            let ctx = SectionCtx {
+            let ctx_curr = SectionCtx {
                 all_nodes: &all_nodes,
                 selected_node_id: self.selected_node_id,
                 applied_by: &snap.applied_by,
-                inner,
-                scroll: if has_prev { 0 } else { self.scroll },
             };
-            render_section(&label, &snap.step_batches, &ctx, &mut y, buf);
+            all_lines.extend(build_section_lines(
+                &format!("step {} (current)", curr_step),
+                &snap.step_batches,
+                &ctx_curr,
+                w,
+            ));
         }
 
-        // Witness section at the bottom.
-        render_witnesses(snap, &mut y, inner, buf);
+        all_lines.extend(build_witness_lines(snap));
+        all_lines.extend(build_legend_lines());
+
+        // Apply scroll and render visible lines.
+        let visible_h = area.height as usize;
+        let visible: Vec<Line> = all_lines
+            .into_iter()
+            .skip(self.scroll)
+            .take(visible_h)
+            .collect();
+
+        for (i, line) in visible.iter().enumerate() {
+            let line_y = area.y + i as u16;
+            if line_y >= area.y + area.height {
+                break;
+            }
+            let r = Rect {
+                x: area.x,
+                y: line_y,
+                width: area.width,
+                height: 1,
+            };
+            Paragraph::new(line.clone()).render(r, buf);
+        }
     }
 }

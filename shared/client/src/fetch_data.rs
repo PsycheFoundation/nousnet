@@ -88,7 +88,10 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> DataFetcher<T, A> {
                         let batch = loop {
                             event!(train::BatchDataDownloadStart);
                             match data_provider.lock().await.get_samples(batch_id).await {
-                                Ok(batch) => break batch,
+                                Ok(batch) => {
+                                    event!(train::BatchDataDownloadComplete{result: Ok(())});
+                                    break batch;
+                                }
                                 Err(err) if retry_count < MAX_RETRIES => {
                                     retry_count += 1;
                                     let delay_ms = BASE_DELAY_MS * (retry_count as u64 - 1);
