@@ -273,7 +273,7 @@ async fn handle_inference(
     info!(
         "Routing request to node: {} (model: {}, assigned: {})",
         target_peer_id.fmt_short(),
-        node.model_name.as_deref().unwrap_or("unknown"),
+        node_model_name,
         assignments
             .get(&target_peer_id)
             .map(|s| s.as_str())
