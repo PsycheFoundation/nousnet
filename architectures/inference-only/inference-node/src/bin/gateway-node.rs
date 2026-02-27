@@ -226,16 +226,21 @@ async fn handle_inference(
     // Find suitable nodes:
     // 1. If model specified: prefer nodes assigned to that model with it loaded
     // 2. If no model specified: use any node with a model loaded
-    let suitable_nodes: Vec<_> = if let Some(model) = requested_model {
+    let suitable_nodes: Vec<(EndpointId, String)> = if let Some(model) = requested_model {
         // Prefer nodes assigned to the requested model that have it loaded
         let assigned_and_loaded: Vec<_> = nodes
             .values()
-            .filter(|n| {
-                assignments
+            .filter_map(|n| {
+                if assignments
                     .get(&n.peer_id)
                     .map(|assigned| assigned == model)
                     .unwrap_or(false)
                     && n.model_name.as_deref() == Some(model)
+                {
+                    Some((n.peer_id, n.model_name.clone()?))
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -245,27 +250,31 @@ async fn handle_inference(
             // Fallback: any node with the requested model loaded
             nodes
                 .values()
-                .filter(|n| n.model_name.as_deref() == Some(model))
+                .filter_map(|n| {
+                    if n.model_name.as_deref() == Some(model) {
+                        Some((n.peer_id, n.model_name.clone()?))
+                    } else {
+                        None
+                    }
+                })
                 .collect()
         }
     } else {
         // No model specified - use any node with a model loaded
-        nodes.values().filter(|n| n.model_name.is_some()).collect()
+        nodes
+            .values()
+            .filter_map(|n| Some((n.peer_id, n.model_name.clone()?)))
+            .collect()
     };
 
-    let nodes_with_model: Vec<(EndpointId, String)> = nodes
-        .values()
-        .filter_map(|n| Some((n.peer_id, n.model_name.clone()?)))
-        .collect();
-
-    if nodes_with_model.is_empty() {
+    if suitable_nodes.is_empty() {
         // No nodes have models loaded yet
         return Err(AppError::NoNodesAvailable);
     }
 
     // Select first available node with a model
     // TODO: Add load balancing and model-specific routing in the future
-    let (target_peer_id, node_model_name) = &nodes_with_model[0];
+    let (target_peer_id, node_model_name) = &suitable_nodes[0];
     let target_peer_id = *target_peer_id;
 
     let model_name = req.model.clone().unwrap_or_else(|| node_model_name.clone());
