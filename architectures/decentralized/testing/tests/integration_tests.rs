@@ -374,14 +374,15 @@ async fn disconnect_client() {
     //   before the next starts, eliminating CPU contention during loading.
     // warmup_time=300: buffer for the 3rd client (spawned at T=180) to finish
     //   loading after joining the coordinator.
-    // max_round_train_time=180: after killing a client, gossip disruption causes
-    //   surviving clients to need extra time completing the round
-    // epoch_time=300: enough time for multiple rounds with slow gossip recovery
+    // max_round_train_time=300: after killing a client, gossip disruption causes
+    //   surviving clients to need extra time completing the round.
+    //   On 2-vCPU CI runners, rounds can take 180s+ with 3 containers competing.
+    // epoch_time=600: enough time for multiple rounds with slow gossip recovery
     let config = ConfigBuilder::new()
         .with_num_clients(3)
         .with_warmup_time(300)
-        .with_max_round_train_time(180)
-        .with_epoch_time(300);
+        .with_max_round_train_time(300)
+        .with_epoch_time(600);
     let _cleanup = e2e_testing_setup_with_config(docker.clone(), 0, config, None).await;
 
     // Spawn clients sequentially with delays to reduce CPU contention
