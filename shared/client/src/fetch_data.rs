@@ -17,7 +17,7 @@ use tokio::{
 };
 use tracing::{Instrument, debug, error, info, trace, trace_span, warn};
 
-use crate::IntegrationTestLogMarker;
+use psyche_core::IntegrationTestLogMarker;
 
 pub type BatchStep = u32;
 pub type BatchIdSet = HashSet<BatchId>;

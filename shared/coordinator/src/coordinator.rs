@@ -1,6 +1,6 @@
 use crate::{
     Commitment, Committee, CommitteeProof, CommitteeSelection, WitnessProof,
-    model::{Checkpoint, HubRepo, LLMDataLocations, Model},
+    model::{Checkpoint, LLMDataLocations, Model},
 };
 
 use anchor_lang::{AnchorDeserialize, AnchorSerialize, InitSpace, prelude::borsh};
