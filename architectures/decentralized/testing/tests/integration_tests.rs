@@ -273,8 +273,8 @@ async fn test_rejoining_client_delay() {
     let mut watcher = DockerWatcher::new(docker.clone());
 
     // initialize a Solana run with 1 client
-    // Use short warmup so client-2 (spawned after 40s) always joins after warmup ends,
-    // ensuring epoch 0 has completed and checkpoint transitions to P2P
+    // Use short warmup so epoch 0 completes quickly (checkpoint Hub -> P2P).
+    // Client-2 is spawned only AFTER epoch 0 finishes to guarantee it sees P2P.
     let config = ConfigBuilder::new()
         .with_num_clients(1)
         .with_warmup_time(25);
@@ -282,9 +282,19 @@ async fn test_rejoining_client_delay() {
 
     let solana_client = Arc::new(SolanaTestClient::new("test".to_string(), None).await);
 
-    tokio::time::sleep(Duration::from_secs(30)).await;
+    // Wait for epoch 0 to complete so checkpoint transitions to P2P.
+    // Client-2 must NOT be spawned during epoch 0 or it would see Hub checkpoint.
+    println!("Waiting for epoch 0 to complete...");
+    let found = solana_client
+        .wait_for_run_state(RunState::Cooldown, 300)
+        .await;
+    assert!(found, "Epoch 0 should reach Cooldown");
+    // Wait for cooldown to finish and checkpoint to transition to P2P
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let current_epoch = solana_client.get_current_epoch().await;
+    println!("Epoch 0 completed, current epoch: {current_epoch}");
 
-    // Spawn client
+    // Spawn client-2 now that checkpoint is P2P
     spawn_new_client(docker.clone(), None).await.unwrap();
 
     let _monitor_client = watcher
@@ -348,9 +358,10 @@ async fn disconnect_client() {
     // Initialize test infrastructure with 0 clients, then spawn them sequentially.
     // On CI (2 vCPUs), starting all 3 simultaneously causes resource starvation
     // where the 3rd client can't complete model loading during warmup.
-    // Sequential spawning with delays lets each client load without contention.
-    // warmup_time=300: the 3rd client spawns ~60s after the 1st, needs time to
-    //   download and load model on congested CI runner. 200s was not enough.
+    // 90s delays between spawns: ensures each client fully loads its model
+    //   before the next starts, eliminating CPU contention during loading.
+    // warmup_time=300: buffer for the 3rd client (spawned at T=180) to finish
+    //   loading after joining the coordinator.
     // max_round_train_time=180: after killing a client, gossip disruption causes
     //   surviving clients to need extra time completing the round
     // epoch_time=300: enough time for multiple rounds with slow gossip recovery
@@ -377,7 +388,7 @@ async fn disconnect_client() {
         .unwrap();
     println!("Spawned client 1: {container_1}");
 
-    tokio::time::sleep(Duration::from_secs(30)).await;
+    tokio::time::sleep(Duration::from_secs(90)).await;
 
     let container_2 = spawn_new_client(docker.clone(), None).await.unwrap();
     let _monitor_client_2 = watcher
@@ -394,7 +405,7 @@ async fn disconnect_client() {
         .unwrap();
     println!("Spawned client 2: {container_2}");
 
-    tokio::time::sleep(Duration::from_secs(30)).await;
+    tokio::time::sleep(Duration::from_secs(90)).await;
 
     let container_3 = spawn_new_client(docker.clone(), None).await.unwrap();
     let _monitor_client_3 = watcher
