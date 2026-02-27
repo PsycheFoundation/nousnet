@@ -104,7 +104,7 @@ pub async fn e2e_testing_setup_with_min(
     DockerTestCleanup {}
 }
 
-pub async fn e2e_testing_setup_subscription(
+pub async fn e2e_testing_setup_rpc_fallback(
     docker_client: Arc<Docker>,
     init_num_clients: usize,
     data_source: Option<Vec<LLMTrainingDataLocation>>,
@@ -127,7 +127,7 @@ pub async fn e2e_testing_setup_subscription(
     let mut command = Command::new("just");
     let command = command
         .args([
-            "run_test_infra_with_proxies_validator",
+            "run_test_infra_with_rpc_fallback_proxies",
             &format!("{init_num_clients}"),
         ])
         .stdout(Stdio::inherit())

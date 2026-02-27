@@ -12,6 +12,7 @@ pub enum IntegrationTestLogMarker {
     Error,
     DataProviderFetchSuccess,
     DataProviderFetchError,
+    RpcFallback,
 }
 
 impl std::fmt::Display for IntegrationTestLogMarker {
@@ -30,6 +31,7 @@ impl std::fmt::Display for IntegrationTestLogMarker {
                 Self::Error => "error",
                 Self::DataProviderFetchSuccess => "data_provider_fetch_success",
                 Self::DataProviderFetchError => "data_provider_fetch_error",
+                Self::RpcFallback => "rpc_fallback",
             }
         )
     }
@@ -50,6 +52,7 @@ impl FromStr for IntegrationTestLogMarker {
             "error" => Self::Error,
             "data_provider_fetch_success" => Self::DataProviderFetchSuccess,
             "data_provider_fetch_error" => Self::DataProviderFetchError,
+            "rpc_fallback" => Self::RpcFallback,
             _ => return Err(()),
         })
     }
