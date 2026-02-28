@@ -238,6 +238,7 @@ impl<T: NodeIdentity, A: AuthenticatableIdentity + 'static> TrainingStepMetadata
             epoch: epoch as u64,
             index: client_index,
             committee_position: committee_proof.position,
+            is_witness: witness_proof.witness.into(),
         });
 
         let assigned_batches = get_batch_ids_for_node(&data_assignments, &self.identity);

@@ -1,5 +1,5 @@
+use std::io;
 use std::time::{Duration, Instant};
-use std::{char, io};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
@@ -230,7 +230,7 @@ pub fn run(mut app: App) -> io::Result<()> {
                     Tabs::new(
                         DetailPanel::iter()
                             .enumerate()
-                            .map(|(i, p)| format!("[{i+1}] {}", p.to_string().to_uppercase())),
+                            .map(|(i, p)| format!("[{}] {}", i + 1, p.to_string().to_uppercase())),
                     )
                     .select(tab_idx)
                     .style(Style::default().fg(Color::DarkGray))
@@ -302,12 +302,10 @@ pub fn run(mut app: App) -> io::Result<()> {
 
                 // ── Box focus (numbers) ──────────────────────────────────────
                 (KeyCode::Char(number), KeyModifiers::NONE) => {
-                    if let Some(number) = number.to_digit(10)
-                        && let Some((_, panel)) = DetailPanel::iter()
-                            .enumerate()
-                            .find(|(i, p)| i == number.into())
-                    {
-                        app.switch_panel(panel)
+                    if let Some(digit) = number.to_digit(10) {
+                        if let Some(panel) = DetailPanel::iter().nth(digit as usize - 1) {
+                            app.switch_panel(panel);
+                        }
                     }
                 }
 

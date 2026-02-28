@@ -19,12 +19,15 @@ pub struct BatchesWidget<'a> {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-fn short_id(id: &str) -> String {
-    if id.len() > 14 {
-        format!("{}…{}", &id[..7], &id[id.len() - 5..])
-    } else {
-        id.to_string()
+fn short_id(id: &str, max_w: usize) -> String {
+    if id.len() <= max_w {
+        return id.to_string();
     }
+    if max_w < 6 {
+        return id[..max_w].to_string();
+    }
+    let tail = max_w.saturating_sub(5);
+    format!("{}…{}", &id[..4], &id[id.len() - tail..])
 }
 
 fn fmt_batch_id(batch_id: &BatchId) -> String {
@@ -263,7 +266,7 @@ fn build_section_data_lines<'a>(
         let assigned = batch
             .assigned_to
             .as_deref()
-            .map(short_id)
+            .map(|id| short_id(id, COL_NODE as usize))
             .unwrap_or_else(|| "—".to_string());
 
         let (data_ch, data_color) = check_char(batch.data_downloaded);
@@ -387,16 +390,16 @@ fn witness_state(
     }
 }
 
-fn build_witness_lines<'a>(snapshot: &'a ClusterSnapshot) -> Vec<Line<'a>> {
+fn build_witness_lines<'a>(
+    snapshot: &'a ClusterSnapshot,
+    selected_node_id: Option<&str>,
+) -> Vec<Line<'a>> {
     if snapshot.step_witnesses.is_empty() {
         return Vec::new();
     }
 
     let coord_step = snapshot.coordinator.as_ref().map(|c| c.step).unwrap_or(0);
 
-    // Only show nodes that are actually witnesses (submitted or elected).
-    // step_witnesses should already only contain elected witnesses, but filter
-    // out any that have rpc_result == Some(false) (rejected) as they failed.
     let witnesses: Vec<_> = snapshot.step_witnesses.iter().collect();
 
     if witnesses.is_empty() {
@@ -417,7 +420,8 @@ fn build_witness_lines<'a>(snapshot: &'a ClusterSnapshot) -> Vec<Line<'a>> {
     let stages = ["waiting", "sending", "sent", "confirmed"];
 
     for (node_id, ws) in &witnesses {
-        let id = short_id(node_id);
+        let id = short_id(node_id, COL_NODE as usize);
+        let is_selected = selected_node_id == Some(node_id.as_str());
         let state = witness_state(ws, coord_step);
         let active_idx = match state {
             WitnessState::Waiting => 0,
@@ -426,7 +430,12 @@ fn build_witness_lines<'a>(snapshot: &'a ClusterSnapshot) -> Vec<Line<'a>> {
             WitnessState::Confirmed => 3,
         };
 
-        let mut spans: Vec<Span> = vec![Span::raw(format!("  {:<15} ", id))];
+        let id_style = if is_selected {
+            Style::default().fg(Color::Yellow).bold()
+        } else {
+            Style::default()
+        };
+        let mut spans: Vec<Span> = vec![Span::styled(format!("  {:<15} ", id), id_style)];
 
         // Render each stage as a lit/dim indicator.
         for (i, &stage_label) in stages.iter().enumerate() {
@@ -599,7 +608,7 @@ impl<'a> Widget for BatchesWidget<'a> {
             }
         }
 
-        for l in build_witness_lines(snap) {
+        for l in build_witness_lines(snap, self.selected_node_id) {
             all_lines.push(ContentLine::Text(l));
         }
         for l in build_legend_lines() {

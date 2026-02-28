@@ -584,20 +584,22 @@ impl ClusterProjection {
                 }
             }
             EventData::Train(Train::WitnessElected(we)) => {
-                self.snapshot.step_witnesses.insert(
-                    node_id.to_string(),
-                    WitnessStatus {
-                        info: WitnessInfo {
-                            step: we.step,
-                            round: we.round,
-                            epoch: we.epoch,
-                            index: we.index,
-                            committee_position: we.committee_position,
+                if we.is_witness {
+                    self.snapshot.step_witnesses.insert(
+                        node_id.to_string(),
+                        WitnessStatus {
+                            info: WitnessInfo {
+                                step: we.step,
+                                round: we.round,
+                                epoch: we.epoch,
+                                index: we.index,
+                                committee_position: we.committee_position,
+                            },
+                            submitted: false,
+                            rpc_result: None,
                         },
-                        submitted: false,
-                        rpc_result: None,
-                    },
-                );
+                    );
+                }
             }
             EventData::Train(Train::DistroResultDeserializeComplete(drc)) => {
                 if let Some(&batch_id) = self.snapshot.blob_to_batch.get(&drc.blob) {

@@ -228,13 +228,15 @@ pub enum Train {
         batch_id: BatchId,
         expected_trainer: Option<String>,
     },
-    #[display("witness elected: step={step} round={round} epoch={epoch}")]
+    #[display("witness elected: step={step} round={round} epoch={epoch} witness={is_witness}")]
     WitnessElected {
         step: u64,
         round: u64,
         epoch: u64,
         index: u64,
         committee_position: u64,
+        /// Whether this node was actually selected as a witness for this step.
+        is_witness: bool,
     },
 
     #[display("distro result deserialize started: {blob}")]
