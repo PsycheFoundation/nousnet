@@ -91,12 +91,6 @@ pub fn run(mut app: App) -> io::Result<()> {
                 let list_area = cols[0];
                 let right_area = cols[1];
 
-                // Node list — highlight border when focused
-                let list_border_color = if focused_box == FocusedBox::NodeList {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                };
                 f.render_widget(
                     NodeListWidget {
                         node_ids: all_node_ids,
@@ -106,16 +100,6 @@ pub fn run(mut app: App) -> io::Result<()> {
                     },
                     list_area,
                 );
-                // Override the node list border color (drawn by NodeListWidget).
-                // Draw a 1-char right-side border between list and right panel.
-                for y in list_area.y..list_area.y + list_area.height {
-                    f.buffer_mut().set_string(
-                        list_area.x + list_area.width.saturating_sub(1),
-                        y,
-                        "│",
-                        Style::default().fg(list_border_color),
-                    );
-                }
 
                 // Right panel border — highlight when detail panel is focused
                 let right_focused = matches!(

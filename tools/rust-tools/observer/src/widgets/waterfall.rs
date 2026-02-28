@@ -431,7 +431,12 @@ impl<'a> Widget for WaterfallWidget<'a> {
             let box_h = (lines.len() as u16 + 2)
                 .min(area.height.saturating_sub(1))
                 .max(3);
-            let box_w = 60u16.min(area.width);
+            let box_w = lines
+                .iter()
+                .map(|l| l.to_string().len() as u16 + 2)
+                .max()
+                .unwrap_or(area.width)
+                .min(area.width);
             let box_y = area.y + area.height.saturating_sub(box_h);
 
             Paragraph::new(lines)

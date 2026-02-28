@@ -1,7 +1,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
     widgets::{Block, Borders, Widget},
 };
 
@@ -9,13 +9,20 @@ pub struct NodeListWidget<'a> {
     pub node_ids: &'a [String],
     pub selected_node_idx: Option<usize>,
     pub node_scroll: usize,
-    #[allow(unused)]
     pub focused: bool,
 }
 
 impl<'a> Widget for NodeListWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default().borders(Borders::ALL).title("[2] nodes");
+        let list_border_color = if self.focused {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("[2] nodes")
+            .fg(list_border_color);
 
         let inner = block.inner(area);
         block.render(area, buf);
