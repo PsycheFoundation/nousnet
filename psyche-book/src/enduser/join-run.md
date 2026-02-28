@@ -88,7 +88,7 @@ We recommend using a dedicated RPC service such as [Helius](https://www.helius.d
 
 ## Additional config variables
 
-In general it's not neccesary to change these variables to join a run since we provide sensible defaults,
+In general it's not necessary to change these variables to join a run since we provide sensible defaults,
 though you might need to.
 
 **`NVIDIA_DRIVER_CAPABILITIES`** - An environment variable that the NVIDIA Container Toolkit uses to determine which compute capabilities should be provided to your container. It is recommended to set it to 'all', e.g. `NVIDIA_DRIVER_CAPABILITIES=all`.
@@ -101,7 +101,7 @@ though you might need to.
 **`TENSOR_PARALLELISM`** - Number of GPUs to distribute the model across, this lets you train a model you can't fit on one single GPU.
 
 - If you have 1 GPU, set this to `1`
-- If your have `n` GPUs you can distribute the model across all of them by setting it to `n`.
+- If you have `n` GPUs you can distribute the model across all of them by setting it to `n`.
 
 **`MICRO_BATCH_SIZE`** - Number of samples processed per GPU per training step
 
