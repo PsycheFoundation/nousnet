@@ -4,10 +4,9 @@ use psyche_event_sourcing::{
 };
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::Widget,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -69,6 +68,21 @@ pub const ALL_CATEGORIES: &[EventCategory] = &[
     EventCategory::Coordinator,
 ];
 
+/// Returns true if a timeline entry passes the given category filter set.
+/// An empty filter means "show everything".
+pub fn entry_matches_filter(entry: &TimelineEntry, filter: &HashSet<EventCategory>) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    match entry {
+        TimelineEntry::Node { event, .. } => {
+            let cat = categorize(&event.data);
+            filter.iter().any(|&f| priority_matches(cat, f))
+        }
+        TimelineEntry::Coordinator { .. } => filter.contains(&EventCategory::Coordinator),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Priority {
     Error = 0,
@@ -119,11 +133,14 @@ fn priority_matches(p: Priority, filter: EventCategory) -> bool {
     )
 }
 
+/// Width of the node name column on the left side of the waterfall.
+const NODE_NAME_W: u16 = 16;
+
 /// Horizontal event-track view with a fixed-size zoom window.
 ///
 /// Shows `zoom` timeline entries at a time. `x_scroll` is the index of the
 /// first visible entry. The scrubber `cursor` entry is always highlighted.
-/// Rows align with `NodeListWidget` via shared `node_scroll`.
+/// Node names are shown on the left; rows scroll vertically with `node_scroll`.
 pub struct WaterfallWidget<'a> {
     pub timeline: &'a ClusterTimeline,
     pub cursor: usize,
@@ -140,9 +157,20 @@ pub struct WaterfallWidget<'a> {
     pub filter: &'a HashSet<EventCategory>,
 }
 
+fn short_node_id(id: &str, max_w: usize) -> String {
+    if id.len() <= max_w {
+        return id.to_string();
+    }
+    if max_w < 6 {
+        return id[..max_w].to_string();
+    }
+    let tail = max_w.saturating_sub(5);
+    format!("{}…{}", &id[..4], &id[id.len() - tail..])
+}
+
 impl<'a> Widget for WaterfallWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 {
+        if area.width < 10 || area.height < 3 {
             return;
         }
 
@@ -151,11 +179,19 @@ impl<'a> Widget for WaterfallWidget<'a> {
             return;
         }
 
+        // Split area: node name column (left) | track area (right).
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(NODE_NAME_W), Constraint::Min(5)])
+            .split(area);
+        let name_area = cols[0];
+        let track_area = cols[1];
+
         let zoom = self.zoom.max(1);
         let win_start = self.x_scroll.min(total.saturating_sub(1));
         let win_end = (win_start + zoom).min(total);
         let win_size = (win_end - win_start).max(1);
-        let track_w = area.width as usize;
+        let track_w = track_area.width as usize;
 
         // Column range for slot `s` (0-based within window).
         let slot_col_start = |s: usize| s * track_w / win_size;
@@ -168,7 +204,6 @@ impl<'a> Widget for WaterfallWidget<'a> {
         };
 
         // Build per-entity slot map: entity_id → slot_index → (priority, display_name).
-        // "coordinator" is treated as a special entity alongside node IDs.
         let mut node_events: BTreeMap<&str, BTreeMap<usize, (Priority, String)>> = BTreeMap::new();
         for (i, entry) in self.timeline.entries().iter().enumerate() {
             if i < win_start || i >= win_end {
@@ -178,7 +213,6 @@ impl<'a> Widget for WaterfallWidget<'a> {
             match entry {
                 TimelineEntry::Node { node_id, event, .. } => {
                     let cat = categorize(&event.data);
-                    // If filter is non-empty, only show events whose category is in the filter.
                     if !self.filter.is_empty() {
                         let matches = self.filter.iter().any(|&f| priority_matches(cat, f));
                         if !matches {
@@ -196,7 +230,6 @@ impl<'a> Widget for WaterfallWidget<'a> {
                     }
                 }
                 TimelineEntry::Coordinator { state, .. } => {
-                    // If filter is non-empty, only show if Coordinator is in the filter.
                     if !self.filter.is_empty() && !self.filter.contains(&EventCategory::Coordinator)
                     {
                         continue;
@@ -212,22 +245,28 @@ impl<'a> Widget for WaterfallWidget<'a> {
 
         let entries = self.timeline.entries();
 
-        // ── Row 0: timestamp ruler ────────────────────────────────────────────
-        let ruler_y = area.y;
+        // ── Row 0 (track area): timestamp ruler ──────────────────────────────
+        let ruler_y = track_area.y;
+        // Also paint the name column ruler row.
+        let name_ruler: String = "─".repeat(name_area.width as usize);
+        buf.set_string(
+            name_area.x,
+            ruler_y,
+            &name_ruler,
+            Style::default().fg(Color::DarkGray),
+        );
+
         let dashes: String = "─".repeat(track_w);
         buf.set_string(
-            area.x,
+            track_area.x,
             ruler_y,
             &dashes,
             Style::default().fg(Color::DarkGray),
         );
 
         // Find the training step at each slot in the visible window.
-        // First, scan backwards from win_start to find the most recent coordinator
-        // step before the window, then scan forward only within the window.
         let step_at_slot: Vec<Option<u64>> = {
             let mut cur: Option<u64> = None;
-            // Find the last coordinator entry before win_start by scanning backwards.
             for i in (0..win_start).rev() {
                 if let TimelineEntry::Coordinator { state, .. } = &entries[i] {
                     cur = Some(state.step);
@@ -244,19 +283,17 @@ impl<'a> Widget for WaterfallWidget<'a> {
             out
         };
 
-        // Write a step label at each slot boundary, skipping any that would
-        // overlap the previous one. scan carries `last_label_end`.
+        // Write step labels on the ruler.
         (0..win_size)
             .filter_map(|slot| {
                 let c_start = slot_col_start(slot);
-                entries.get(win_start + slot)?; // confirm entry exists
+                entries.get(win_start + slot)?;
                 let label = match step_at_slot[slot] {
                     Some(step) => format!("step {step}"),
                     None => format!("{}", win_start + slot),
                 };
                 Some((c_start, label))
             })
-            // Only emit when the label changes (suppresses s1 s1 s1 …).
             .scan(None::<String>, |prev, (c_start, label)| {
                 if prev.as_deref() == Some(label.as_str()) {
                     Some(None)
@@ -278,7 +315,7 @@ impl<'a> Widget for WaterfallWidget<'a> {
             .flatten()
             .for_each(|(c_start, label)| {
                 buf.set_string(
-                    area.x + c_start as u16,
+                    track_area.x + c_start as u16,
                     ruler_y,
                     &label,
                     Style::default().fg(Color::White),
@@ -288,228 +325,213 @@ impl<'a> Widget for WaterfallWidget<'a> {
         let zoom_label = format!(" zoom:{zoom:2} ");
         if zoom_label.len() <= track_w {
             buf.set_string(
-                area.x + (track_w - zoom_label.len()) as u16,
+                track_area.x + (track_w - zoom_label.len()) as u16,
                 ruler_y,
                 &zoom_label,
                 Style::default().fg(Color::White),
             );
         }
 
-        for row in 1..area.height as usize {
-            // row 1 = first visible node (node_scroll + 0)
-            let node_row = self.node_scroll + (row - 1);
-            let Some(node_id) = self.node_ids.get(node_row) else {
-                break;
-            };
-            let y = area.y + row as u16;
-            let is_selected = self.selected_node_idx == Some(node_row);
-
-            let empty = BTreeMap::new();
-            let slot_map = node_events.get(node_id.as_str()).unwrap_or(&empty);
-
-            // Paint layer 1: fill entire track with dim dots.
-            let dots: String = "-".repeat(track_w);
-            buf.set_string(area.x, y, &dots, {
-                let s = Style::default();
-                if is_selected {
-                    s.add_modifier(Modifier::BOLD)
-                } else {
-                    s.fg(Color::DarkGray)
-                }
-            });
-
-            // Paint layer 2: each event flows rightward until the next occupied slot.
-            // The cursor slot is painted here too — layer 3 just stamps │ on top.
-            for slot in 0..win_size {
-                let Some((cat, name)) = slot_map.get(&slot) else {
-                    continue;
-                };
-                let stop_col = (slot + 1..win_size)
-                    .find(|&s| slot_map.contains_key(&s))
-                    .map(&slot_col_start)
-                    .unwrap_or(track_w);
-
-                let available = stop_col - slot_col_start(slot);
-                let text: String = "▶".chars().chain(name.chars()).take(available).collect();
-                let style = if is_selected {
-                    Style::default()
-                        .fg(cat_color(*cat))
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(cat_color(*cat))
-                };
-                buf.set_string(area.x + slot_col_start(slot) as u16, y, &text, style);
-            }
-
-            // Paint layer 3: cursor indicator — just │ at the slot's first column,
-            // only on the selected row (or every row when nothing is selected).
-            // We deliberately don't re-draw the event text here.
-            let cursor_on_this_row = self
-                .selected_node_idx
-                .map(|sel| sel == node_row)
-                .unwrap_or(true);
-            if cursor_on_this_row && let Some(cs) = cursor_slot {
-                let c_start = slot_col_start(cs);
-                buf.set_string(
-                    area.x + c_start as u16,
-                    y,
-                    "│",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                );
-            }
+        // ── Scroll indicators and node rows ──────────────────────────────────
+        // Virtual row list: row 0 = "all info", rows 1..=N = actual nodes.
+        // node_scroll is an offset into this virtual list.
+        let body_h = area.height.saturating_sub(1) as usize; // rows below the ruler
+        if body_h < 2 {
+            return;
         }
 
-        // ── Event detail box (bottom-left, floating) ──────────────────────────
-        // When an entity is selected, find its most recent event at or before the
-        // cursor. When nothing is selected, use whatever is at the cursor.
-        let selected_entity = self.selected_node_idx.and_then(|i| self.node_ids.get(i));
-        let passes_filter = |entry: &&TimelineEntry| -> bool {
-            if self.filter.is_empty() {
-                return true;
-            }
-            match entry {
-                TimelineEntry::Node { event, .. } => {
-                    let cat = categorize(&event.data);
-                    self.filter.iter().any(|&f| priority_matches(cat, f))
-                }
-                TimelineEntry::Coordinator { .. } => {
-                    self.filter.contains(&EventCategory::Coordinator)
-                }
-            }
-        };
-        // Only show the detail box when the cursor is *exactly* on a matching entry.
-        let detail_entry = entries.get(self.cursor).filter(|e| {
-            passes_filter(e)
-                && match (e, selected_entity) {
-                    (_, None) => true,
-                    (TimelineEntry::Node { node_id, .. }, Some(eid)) => {
-                        node_id.as_str() == eid.as_str()
-                    }
-                    (TimelineEntry::Coordinator { .. }, Some(eid)) => eid.as_str() == "coordinator",
-                }
-        });
+        // Total virtual rows: 1 ("all info") + node count.
+        let total_virtual = 1 + self.node_ids.len();
 
-        if let Some(entry) = detail_entry {
-            let (title, debug_str, ts, entity_label) = match entry {
-                TimelineEntry::Node { event, node_id, .. } => {
-                    let short = if node_id.len() > 12 {
-                        format!("{}…{}", &node_id[..4], &node_id[node_id.len() - 5..])
-                    } else {
-                        node_id.clone()
-                    };
-                    (
-                        format!(" {} ", event.data),
-                        format!("{:#?}", event.data),
-                        event.timestamp,
-                        short,
-                    )
-                }
-                TimelineEntry::Coordinator { state, timestamp } => (
-                    format!(" coordinator e{} s{} ", state.epoch, state.step),
-                    format!("{:#?}", state),
-                    *timestamp,
-                    "coordinator".to_string(),
-                ),
-            };
-
-            let mut lines: Vec<Line> = vec![
-                Line::from(format!(
-                    "  {} · {}",
-                    entity_label,
-                    ts.format("%H:%M:%S%.3f")
-                ))
-                .style(Style::default().fg(Color::DarkGray)),
-            ];
-            lines.extend(
-                debug_str
-                    .lines()
-                    .map(|l| Line::from(format!("  {l}")).style(Style::default().fg(Color::Gray))),
+        // Top scroll indicator (row 1 below ruler).
+        let top_indicator_y = area.y + 1;
+        let rows_above = self.node_scroll;
+        if rows_above > 0 {
+            let label = format!("  ↑ {} more", rows_above);
+            let label: String = label.chars().take(name_area.width as usize).collect();
+            buf.set_string(
+                name_area.x,
+                top_indicator_y,
+                &format!("{:<w$}", label, w = name_area.width as usize),
+                Style::default().fg(Color::DarkGray),
             );
-
-            let box_h = (lines.len() as u16 + 2)
-                .min(area.height.saturating_sub(1))
-                .max(3);
-            let box_w = lines
-                .iter()
-                .map(|l| l.to_string().len() as u16 + 2)
-                .max()
-                .unwrap_or(area.width)
-                .min(area.width);
-            let box_y = area.y + area.height.saturating_sub(box_h);
-
-            Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(title)
-                        .border_style(Style::default().fg(Color::Yellow)),
-                )
-                .render(
-                    Rect {
-                        x: area.x,
-                        y: box_y,
-                        width: box_w,
-                        height: box_h,
-                    },
-                    buf,
-                );
         }
 
-        // ── Category filter picker (bottom-right) ─────────────────────────────
-        // Each category: ■ be(f)ore(k)ey after  — key char is bold in parens.
-        let picker_spans: Vec<ratatui::text::Span> = ALL_CATEGORIES
-            .iter()
-            .flat_map(|&cat| {
-                let active = self.filter.contains(&cat);
-                let base = if active {
+        // Node rows start at row 2 (after ruler + top indicator).
+        let node_rows_start_y = area.y + 2;
+        // Reserve 1 row at bottom for bottom scroll indicator.
+        let max_visible_rows = body_h.saturating_sub(2);
+
+        for row in 0..max_visible_rows {
+            let virt_row = self.node_scroll + row;
+            if virt_row >= total_virtual {
+                break;
+            }
+            let y = node_rows_start_y + row as u16;
+            if y >= area.y + area.height.saturating_sub(1) {
+                break; // leave room for bottom indicator
+            }
+
+            if virt_row == 0 {
+                // ── "all info" row ────────────────────────────────────────────
+                let is_selected = self.selected_node_idx.is_none();
+                let max_name = (name_area.width as usize).saturating_sub(2);
+                let prefix = if is_selected { "► " } else { "  " };
+                let label = "all info";
+                let name_label = format!("{}{:<w$}", prefix, label, w = max_name);
+                let name_label: String =
+                    name_label.chars().take(name_area.width as usize).collect();
+                let name_style = if is_selected {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(cat.color())
+                        .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(cat.color())
+                    Style::default().fg(Color::Gray)
                 };
-                let key_style = base.add_modifier(Modifier::BOLD);
+                buf.set_string(name_area.x, y, &name_label, name_style);
 
-                let label = cat.label();
-                let key = cat.key();
-                let key_pos = label.find(key).unwrap_or(0);
-                let before = &label[..key_pos];
-                let after = &label[key_pos + key.len_utf8()..];
+                // Track: show all events merged across all entities.
+                let dots: String = "-".repeat(track_w);
+                buf.set_string(track_area.x, y, &dots, {
+                    if is_selected {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                });
 
-                let mut spans: Vec<ratatui::text::Span> = vec![
-                    ratatui::text::Span::styled("■", base),
-                    ratatui::text::Span::styled(" ", base),
-                ];
-                if !before.is_empty() {
-                    spans.push(ratatui::text::Span::styled(before.to_string(), base));
+                // Merge all node_events into a single slot map (highest priority wins).
+                let mut merged: BTreeMap<usize, (Priority, &str)> = BTreeMap::new();
+                for slot_map in node_events.values() {
+                    for (&slot, (cat, name)) in slot_map.iter() {
+                        let entry = merged.entry(slot).or_insert((*cat, name.as_str()));
+                        if *cat < entry.0 {
+                            *entry = (*cat, name.as_str());
+                        }
+                    }
                 }
-                spans.push(ratatui::text::Span::styled(format!("({key})"), key_style));
-                if !after.is_empty() {
-                    spans.push(ratatui::text::Span::styled(after.to_string(), base));
+                for (&slot, &(cat, name)) in &merged {
+                    let stop_col = (slot + 1..win_size)
+                        .find(|&s| merged.contains_key(&s))
+                        .map(&slot_col_start)
+                        .unwrap_or(track_w);
+                    let available = stop_col - slot_col_start(slot);
+                    let text: String = "▶".chars().chain(name.chars()).take(available).collect();
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(cat_color(cat))
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(cat_color(cat))
+                    };
+                    buf.set_string(track_area.x + slot_col_start(slot) as u16, y, &text, style);
                 }
-                spans.push(ratatui::text::Span::styled(" ", base));
-                spans
-            })
-            .collect();
-        // Width: ■(1) + space(1) + label.len() + "(x)"(+2) + space(1) = label.len() + 5
-        let picker_w = ALL_CATEGORIES
-            .iter()
-            .map(|c| c.label().len() + 5)
-            .sum::<usize>() as u16;
-        if picker_w <= area.width && area.height > 0 {
-            let px = area.x + area.width.saturating_sub(picker_w);
-            let py = area.y + area.height - 1;
-            Paragraph::new(Line::from(picker_spans)).render(
-                Rect {
-                    x: px,
-                    y: py,
-                    width: picker_w,
-                    height: 1,
-                },
-                buf,
+
+                // Cursor indicator on "all info" row.
+                if is_selected {
+                    if let Some(cs) = cursor_slot {
+                        let c_start = slot_col_start(cs);
+                        buf.set_string(
+                            track_area.x + c_start as u16,
+                            y,
+                            "│",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        );
+                    }
+                }
+            } else {
+                // ── Regular node row ──────────────────────────────────────────
+                let node_idx = virt_row - 1;
+                let Some(node_id) = self.node_ids.get(node_idx) else {
+                    break;
+                };
+                let is_selected = self.selected_node_idx == Some(node_idx);
+
+                // Node name (left column).
+                let max_name = (name_area.width as usize).saturating_sub(2);
+                let short_id = short_node_id(node_id, max_name);
+                let prefix = if is_selected { "► " } else { "  " };
+                let name_label = format!("{}{:<w$}", prefix, short_id, w = max_name);
+                let name_label: String =
+                    name_label.chars().take(name_area.width as usize).collect();
+                let name_style = if is_selected {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                buf.set_string(name_area.x, y, &name_label, name_style);
+
+                // Event track (right column).
+                let empty = BTreeMap::new();
+                let slot_map = node_events.get(node_id.as_str()).unwrap_or(&empty);
+
+                let dots: String = "-".repeat(track_w);
+                buf.set_string(track_area.x, y, &dots, {
+                    if is_selected {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                });
+
+                for slot in 0..win_size {
+                    let Some((cat, name)) = slot_map.get(&slot) else {
+                        continue;
+                    };
+                    let stop_col = (slot + 1..win_size)
+                        .find(|&s| slot_map.contains_key(&s))
+                        .map(&slot_col_start)
+                        .unwrap_or(track_w);
+
+                    let available = stop_col - slot_col_start(slot);
+                    let text: String = "▶".chars().chain(name.chars()).take(available).collect();
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(cat_color(*cat))
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(cat_color(*cat))
+                    };
+                    buf.set_string(track_area.x + slot_col_start(slot) as u16, y, &text, style);
+                }
+
+                // Cursor indicator.
+                let cursor_on_this_row = self
+                    .selected_node_idx
+                    .map(|sel| sel == node_idx)
+                    .unwrap_or(false);
+                if cursor_on_this_row {
+                    if let Some(cs) = cursor_slot {
+                        let c_start = slot_col_start(cs);
+                        buf.set_string(
+                            track_area.x + c_start as u16,
+                            y,
+                            "│",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Bottom scroll indicator.
+        let visible_last = self.node_scroll + max_visible_rows;
+        let rows_below = total_virtual.saturating_sub(visible_last);
+        let bottom_y = area.y + area.height.saturating_sub(1);
+        if rows_below > 0 {
+            let label = format!("  ↓ {} more", rows_below);
+            let label: String = label.chars().take(name_area.width as usize).collect();
+            buf.set_string(
+                name_area.x,
+                bottom_y,
+                &format!("{:<w$}", label, w = name_area.width as usize),
+                Style::default().fg(Color::DarkGray),
             );
         }
     }

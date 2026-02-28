@@ -409,23 +409,62 @@ impl ClusterTimeline {
         // Sort new entries, then merge into the existing (already-sorted) entries.
         new_entries.sort_by_key(|e| e.timestamp());
 
+        let newest_existing = self
+            .entries
+            .last()
+            .map(|e| e.timestamp())
+            .unwrap_or_default();
+
         if new_entries
             .first()
             .map(|e| e.timestamp())
             .unwrap_or_default()
-            < self
-                .entries
-                .last()
-                .map(|e| e.timestamp())
-                .unwrap_or_default()
+            < newest_existing
         {
-            unimplemented!("a new event is older than the previously newest event! ");
+            // New events are older than the newest existing event — they need to
+            // be merged into the sorted timeline. Find the point where new events
+            // start interleaving, roll back to the last checkpoint before that,
+            // merge, and re-index from there.
+            let earliest_new_ts = new_entries.first().unwrap().timestamp();
+            let merge_point = self
+                .entries
+                .partition_point(|e| e.timestamp() < earliest_new_ts);
+
+            // Keep only checkpoints before the merge point.
+            let truncate_to = self
+                .checkpoints
+                .iter()
+                .position(|(ci, _)| *ci >= merge_point)
+                .unwrap_or(self.checkpoints.len());
+            self.checkpoints.truncate(truncate_to);
+
+            // Pop the last valid checkpoint to use as our replay base.
+            let (replay_start, base_snapshot) = self
+                .checkpoints
+                .pop()
+                .unwrap_or((0, ClusterSnapshot::new()));
+            self.tail_projection = ClusterProjection::from_snapshot(base_snapshot);
+
+            // Merge new entries and re-sort.
+            self.entries.extend(new_entries);
+            self.entries.sort_by_key(|e| e.timestamp());
+
+            // Rebuild checkpoints and projection from the replay point.
+            self.extend_checkpoints(replay_start);
+
+            // Rebuild entity ID and timestamp caches from scratch since
+            // insertion order may have changed.
+            self.rebuild_entity_ids();
+            self.node_timestamp_ranges.clear();
+            self.extend_timestamp_ranges(0);
+        } else {
+            // Fast path: new events are all newer, just append.
+            let append_start = self.entries.len();
+            self.entries.extend(new_entries);
+            self.extend_checkpoints(append_start);
+            self.extend_entity_ids(append_start);
+            self.extend_timestamp_ranges(append_start);
         }
-        let append_start = self.entries.len();
-        self.entries.extend(new_entries);
-        self.extend_checkpoints(append_start);
-        self.extend_entity_ids(append_start);
-        self.extend_timestamp_ranges(append_start);
         Ok(true)
     }
 

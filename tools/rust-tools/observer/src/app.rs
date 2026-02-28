@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use psyche_event_sourcing::projection::ClusterSnapshot;
 use psyche_event_sourcing::timeline::ClusterTimeline;
+use strum::{Display, EnumIter, IntoEnumIterator};
 
-pub use crate::widgets::waterfall::EventCategory;
+pub use crate::widgets::waterfall::{EventCategory, entry_matches_filter};
 
 #[derive(Debug, Clone, Default)]
 pub struct NodeFileStats {
@@ -15,34 +16,12 @@ pub struct NodeFileStats {
     pub bytes_per_sec: u64,
 }
 
-/// Which panel/box currently has keyboard focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FocusedBox {
-    Scrubber, // 1
-    NodeList, // 2
-    Timeline, // 3
-    Node,     // 4
-    Loss,     // 5
-    Batches,  // 6
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, Display)]
 pub enum DetailPanel {
-    Timeline,
+    Event,
+    Batches,
     Node,
     Loss,
-    Batches,
-}
-
-impl DetailPanel {
-    pub fn next(self) -> DetailPanel {
-        match self {
-            DetailPanel::Timeline => DetailPanel::Node,
-            DetailPanel::Node => DetailPanel::Loss,
-            DetailPanel::Loss => DetailPanel::Batches,
-            DetailPanel::Batches => DetailPanel::Timeline,
-        }
-    }
 }
 
 pub struct App {
@@ -57,9 +36,10 @@ pub struct App {
     pub events_dir: PathBuf,
     /// Live file-size stats per node_id, refreshed every tick.
     pub node_file_stats: IndexMap<String, NodeFileStats>,
+
+    /// Which sub-panel is open
     pub detail_panel: DetailPanel,
-    pub focused_box: FocusedBox,
-    pub batch_scroll: usize,
+
     /// Number of timeline entries visible at once in the waterfall x-axis.
     pub waterfall_zoom: usize,
     /// Index of the first timeline entry visible in the waterfall window.
@@ -111,9 +91,7 @@ impl App {
             speed: 1,
             events_dir,
             node_file_stats: IndexMap::new(),
-            detail_panel: DetailPanel::Timeline,
-            focused_box: FocusedBox::Timeline,
-            batch_scroll: 0,
+            detail_panel: DetailPanel::Event,
             waterfall_zoom: 20,
             waterfall_x_scroll: 0,
             waterfall_filter: HashSet::new(),
@@ -132,11 +110,37 @@ impl App {
 
     pub fn step_forward(&mut self, n: usize) {
         let max = self.timeline.len().saturating_sub(1);
-        self.cursor = (self.cursor + n).min(max);
+        if self.waterfall_filter.is_empty() {
+            self.cursor = (self.cursor + n).min(max);
+        } else {
+            let entries = self.timeline.entries();
+            let mut remaining = n;
+            let mut pos = self.cursor;
+            while remaining > 0 && pos < max {
+                pos += 1;
+                if entry_matches_filter(&entries[pos], &self.waterfall_filter) {
+                    remaining -= 1;
+                }
+            }
+            self.cursor = pos;
+        }
     }
 
     pub fn step_backward(&mut self, n: usize) {
-        self.cursor = self.cursor.saturating_sub(n);
+        if self.waterfall_filter.is_empty() {
+            self.cursor = self.cursor.saturating_sub(n);
+        } else {
+            let entries = self.timeline.entries();
+            let mut remaining = n;
+            let mut pos = self.cursor;
+            while remaining > 0 && pos > 0 {
+                pos -= 1;
+                if entry_matches_filter(&entries[pos], &self.waterfall_filter) {
+                    remaining -= 1;
+                }
+            }
+            self.cursor = pos;
+        }
     }
 
     pub fn go_first(&mut self) {
@@ -176,16 +180,20 @@ impl App {
     }
 
     /// Adjust `node_scroll` so the selected node is within the visible viewport.
+    /// The virtual row list has "all info" at index 0 and nodes at 1..=N.
     pub fn ensure_node_visible(&mut self, viewport_h: usize) {
         if viewport_h == 0 {
             return;
         }
-        if let Some(idx) = self.selected_node_idx {
-            if idx < self.node_scroll {
-                self.node_scroll = idx;
-            } else if idx >= self.node_scroll + viewport_h {
-                self.node_scroll = idx + 1 - viewport_h;
-            }
+        // Map selection to virtual row index: None → 0, Some(i) → i+1.
+        let virt_idx = match self.selected_node_idx {
+            None => 0,
+            Some(i) => i + 1,
+        };
+        if virt_idx < self.node_scroll {
+            self.node_scroll = virt_idx;
+        } else if virt_idx >= self.node_scroll + viewport_h {
+            self.node_scroll = virt_idx + 1 - viewport_h;
         }
     }
 
@@ -229,16 +237,9 @@ impl App {
         }
     }
 
-    /// Focus a box by number key and also switch the detail panel when relevant.
-    pub fn focus_box(&mut self, b: FocusedBox) {
-        self.focused_box = b;
-        match b {
-            FocusedBox::Timeline => self.detail_panel = DetailPanel::Timeline,
-            FocusedBox::Node => self.detail_panel = DetailPanel::Node,
-            FocusedBox::Loss => self.detail_panel = DetailPanel::Loss,
-            FocusedBox::Batches => self.detail_panel = DetailPanel::Batches,
-            FocusedBox::Scrubber | FocusedBox::NodeList => {}
-        }
+    /// Switch a detail panel.
+    pub fn switch_panel(&mut self, panel: DetailPanel) {
+        self.detail_panel = panel;
     }
 
     /// Toggle a category filter on the waterfall (press same key again to remove).
@@ -251,15 +252,9 @@ impl App {
     }
 
     pub fn cycle_detail_panel(&mut self) {
-        self.detail_panel = self.detail_panel.next();
-    }
-
-    pub fn scroll_batches_up(&mut self) {
-        self.batch_scroll = self.batch_scroll.saturating_sub(1);
-    }
-
-    pub fn scroll_batches_down(&mut self) {
-        self.batch_scroll += 1;
+        let mut iter = DetailPanel::iter().cycle();
+        iter.find(|p| *p == self.detail_panel);
+        self.detail_panel = iter.next().unwrap();
     }
 
     pub fn tick(&mut self) -> bool {
