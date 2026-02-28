@@ -205,6 +205,8 @@ def main():
 
     dp = int(store.get("dp").decode())
     tp = int(store.get("tp").decode())
+    override_mpe = store.get("override_max_position_embeddings").decode()
+    override_max_position_embeddings = int(override_mpe) if override_mpe else None
 
     device = args.device if args.device else 0
 
@@ -215,6 +217,7 @@ def main():
         attn_implementation="flash_attention_2",
         dp=dp,
         tp=tp,
+        override_max_position_embeddings=override_max_position_embeddings,
     )
 
     trainer: Optional[Trainer] = None

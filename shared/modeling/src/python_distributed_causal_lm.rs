@@ -324,6 +324,12 @@ impl PythonDistributedCausalLM {
                 }
                 comm.set("dp", &format!("{}", parallelism.dp))?;
                 comm.set("tp", &format!("{}", parallelism.tp))?;
+                comm.set(
+                    "override_max_position_embeddings",
+                    &override_max_position_embeddings
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                )?;
                 let local = PythonCausalLM::new(
                     &architecture,
                     &source,
