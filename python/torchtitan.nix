@@ -34,8 +34,8 @@ let
   src = fetchFromGitHub {
     owner = "NousResearch";
     repo = "torchtitan";
-    rev = "06d501f5193d58f55de729ec462c39e189d35520";
-    hash = "sha256-1acgrjXsJTIfxkImnzVWKv/SSc+LRsXDUU2zc+ZriTk=";
+    rev = "a43ee472cee64dd3a771c5be9903ecd3e20f36a1";
+    hash = "sha256-MLUmCW/ZR32cm3qsGOo4X1Q9VZle2rZmRiveVnWZsuU=";
   };
   version = lib.removeSuffix "\n" (builtins.readFile (src + "/assets/version.txt"));
 in
