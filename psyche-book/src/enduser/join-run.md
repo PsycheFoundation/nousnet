@@ -10,6 +10,8 @@ Before joining a run you need to make sure you meet a few requisites:
 
 The Psyche client currently only runs on modern Linux distributions.
 
+> Experimental: the lower-level client supports native device selection such as `--device mps` for Apple Silicon development builds, but the recommended compute-provider flow uses a Dockerized CUDA client. Joining production or permissioned runs from a native non-Docker client requires a compatible locally built client binary and approval from the run administrator.
+
 ### NVIDIA GPU and Drivers
 
 Psyche requires an NVIDIA CUDA-capable GPU for model training. Your system must have NVIDIA drivers installed.
@@ -58,7 +60,7 @@ Before running it, you should create an environment file with some needed variab
 The `.env` file should have at least this defined:
 
 ```bash
-WALLET_PATH=/path/to/your/keypair.json
+WALLET_PRIVATE_KEY_PATH=/path/to/your/keypair.json
 
 # Required: Solana RPC Endpoints
 RPC=https://your-primary-rpc-provider.com
@@ -78,6 +80,25 @@ Then, you can start training through the run manager running:
 ```bash
 ./run-manager --env-file /path/to/your/.env
 ```
+
+For native-client development on non-Docker accelerators, run a locally built client through run-manager:
+
+```bash
+./run-manager \
+  --env-file /path/to/your/.env \
+  --native-client /path/to/psyche-solana-client
+```
+
+For Apple Silicon, pass device options after `--`:
+
+```bash
+./run-manager \
+  --env-file /path/to/your/.env \
+  --native-client /path/to/psyche-solana-client \
+  -- --device mps --data-parallelism 1 --tensor-parallelism 1
+```
+
+Native clients do not download the coordinator-selected Docker image, so use this only when the run administrator has confirmed that your native client build is compatible with the run.
 
 ### Automatic Run Selection
 

@@ -1,15 +1,15 @@
 use anchor_client::solana_sdk::bs58;
 use anchor_client::solana_sdk::pubkey::Pubkey;
 use anchor_client::solana_sdk::signature::{EncodableKey, Keypair, Signer};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use std::io::{BufRead, BufReader, Cursor};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tokio::signal;
 use tracing::{debug, error, info, warn};
 
-use crate::docker::RunInfo;
 use crate::docker::coordinator_client::CoordinatorClient;
+use crate::docker::RunInfo;
 use crate::get_env_var;
 use crate::load_and_apply_env_file;
 use crate::load_wallet_key;
@@ -22,10 +22,22 @@ pub struct RunManager {
     env_file: PathBuf,
     wallet_key: String,
     run_id: String,
-    local_docker: bool,
+    client_launch: ClientLaunch,
     coordinator_client: CoordinatorClient,
     scratch_dir: Option<String>,
     client_authorizer: Pubkey,
+}
+
+#[derive(Debug)]
+pub enum ClientLaunch {
+    Docker {
+        local: bool,
+    },
+    Native {
+        client_binary: PathBuf,
+        client_version: Option<String>,
+        client_args: Vec<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -38,14 +50,16 @@ impl RunManager {
     pub fn new(
         coordinator_program_id: String,
         env_file: PathBuf,
-        local_docker: bool,
+        client_launch: ClientLaunch,
         authorizer: Option<Pubkey>,
     ) -> Result<Self> {
-        // Verify docker is available
-        Command::new("docker")
-            .arg("--version")
-            .output()
-            .context("Failed to execute docker command. Is Docker installed and accessible?")?;
+        if matches!(client_launch, ClientLaunch::Docker { .. }) {
+            // Verify docker is available
+            Command::new("docker")
+                .arg("--version")
+                .output()
+                .context("Failed to execute docker command. Is Docker installed and accessible?")?;
+        }
 
         load_and_apply_env_file(&env_file)?;
 
@@ -82,7 +96,7 @@ impl RunManager {
                     run_id,
                     coordinator_client,
                     env_file,
-                    local_docker,
+                    client_launch,
                     scratch_dir,
                     client_authorizer,
                 });
@@ -108,7 +122,7 @@ impl RunManager {
             run_id,
             coordinator_client,
             env_file,
-            local_docker,
+            client_launch,
             scratch_dir,
             client_authorizer,
         })
@@ -116,12 +130,16 @@ impl RunManager {
 
     /// Determine which Docker image to use and pull it if necessary
     async fn prepare_image(&self) -> Result<String> {
+        let local = match self.client_launch {
+            ClientLaunch::Docker { local } => local,
+            ClientLaunch::Native { .. } => unreachable!("native launch does not use Docker image"),
+        };
         let docker_tag = self
             .coordinator_client
-            .get_docker_tag_for_run(&self.run_id, self.local_docker)?;
+            .get_docker_tag_for_run(&self.run_id, local)?;
         info!("Docker tag for run '{}': {}", self.run_id, docker_tag);
 
-        if self.local_docker {
+        if local {
             info!("Using local image (skipping pull): {}", docker_tag);
         } else {
             info!("Pulling image from registry: {}", docker_tag);
@@ -165,7 +183,7 @@ impl RunManager {
         info!("Creating container from image: {}", image_name);
 
         let client_version = if image_name.contains("sha256:") {
-            if self.local_docker {
+            if matches!(self.client_launch, ClientLaunch::Docker { local: true }) {
                 image_name
             } else {
                 image_name
@@ -209,7 +227,9 @@ impl RunManager {
             cmd.arg("--entrypoint").arg(entrypoint);
         }
 
-        if image_name.contains("sha256:") && self.local_docker {
+        if image_name.contains("sha256:")
+            && matches!(self.client_launch, ClientLaunch::Docker { local: true })
+        {
             // This is a special case for the local version - for ease of use we just
             // run the container using the ImageId SHA256 instead of a full name
             cmd.arg(client_version);
@@ -314,8 +334,92 @@ impl RunManager {
         Ok(())
     }
 
+    async fn run_native_client(
+        &self,
+        client_binary: &PathBuf,
+        client_version: &Option<String>,
+        client_args: &[String],
+        entrypoint: &Option<Entrypoint>,
+    ) -> Result<i32> {
+        if entrypoint.is_some() {
+            bail!("--entrypoint is only supported in Docker mode");
+        }
+
+        let expected_version = self
+            .coordinator_client
+            .get_client_version_for_run(&self.run_id)?;
+        info!(
+            "Coordinator expects client version '{}' for run '{}'",
+            expected_version, self.run_id
+        );
+
+        let mut cmd = tokio::process::Command::new(client_binary);
+        cmd.arg("train")
+            .args(client_args)
+            .env("RAW_WALLET_PRIVATE_KEY", &self.wallet_key)
+            .env("RUN_ID", &self.run_id)
+            .env("AUTHORIZER", self.client_authorizer.to_string())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
+
+        if let Some(client_version) = client_version {
+            info!("Using native CLIENT_VERSION={}", client_version);
+            cmd.env("CLIENT_VERSION", client_version);
+        } else {
+            warn!(
+                "No native client version was provided. The client will warn and skip coordinator version validation."
+            );
+        }
+
+        info!(
+            "Starting native Psyche client: {} train {}",
+            client_binary.display(),
+            client_args.join(" ")
+        );
+        let mut child = cmd.spawn().with_context(|| {
+            format!(
+                "Failed to start native Psyche client '{}'",
+                client_binary.display()
+            )
+        })?;
+
+        let status = tokio::select! {
+            status = child.wait() => status.context("Failed to wait for native Psyche client")?,
+            _ = signal::ctrl_c() => {
+                info!("\nReceived interrupt signal, stopping native client...");
+                child.start_kill().context("Failed to stop native Psyche client")?;
+                child.wait().await.context("Failed to wait for stopped native Psyche client")?
+            }
+        };
+
+        Ok(status.code().unwrap_or(1))
+    }
+
     pub async fn run(&self, entrypoint: Option<Entrypoint>) -> Result<()> {
         loop {
+            if let ClientLaunch::Native {
+                client_binary,
+                client_version,
+                client_args,
+            } = &self.client_launch
+            {
+                let exit_code = self
+                    .run_native_client(client_binary, client_version, client_args, &entrypoint)
+                    .await?;
+                if exit_code == VERSION_MISMATCH_EXIT_CODE {
+                    bail!(
+                        "Native client exited with version mismatch. Rebuild or select a client binary compatible with run '{}'.",
+                        self.run_id
+                    );
+                }
+                info!(
+                    "Native client exited with code {}, shutting down",
+                    exit_code
+                );
+                return Ok(());
+            }
+
             let docker_tag = self.prepare_image().await?;
             info!("Starting container...");
 

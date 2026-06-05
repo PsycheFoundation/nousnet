@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use psyche_coordinator::RunState;
 use psyche_solana_authorizer::state::Authorization;
 use psyche_solana_coordinator::{
-    CoordinatorInstance, coordinator_account_from_bytes, find_coordinator_instance,
-    logic::JOIN_RUN_AUTHORIZATION_SCOPE,
+    coordinator_account_from_bytes, find_coordinator_instance, logic::JOIN_RUN_AUTHORIZATION_SCOPE,
+    CoordinatorInstance,
 };
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_client::rpc_client::RpcClient;
@@ -174,7 +174,7 @@ impl CoordinatorClient {
         Ok(instance)
     }
 
-    pub fn get_docker_tag_for_run(&self, run_id: &str, local_docker: bool) -> Result<String> {
+    pub fn get_client_version_for_run(&self, run_id: &str) -> Result<String> {
         info!("Querying coordinator for Run ID: {}", run_id);
 
         let instance = self.fetch_coordinator_data(run_id)?;
@@ -190,6 +190,12 @@ impl CoordinatorClient {
             "Fetched CoordinatorInstance from chain: {{ run_id: {}, coordinator_account: {}, client_version: {} }}",
             instance.run_id, instance.coordinator_account, client_version
         );
+
+        Ok(client_version)
+    }
+
+    pub fn get_docker_tag_for_run(&self, run_id: &str, local_docker: bool) -> Result<String> {
+        let client_version = self.get_client_version_for_run(run_id)?;
 
         // Depending on how the version is specified in the Coordinator, we should format
         // it accordingly. When specifing a RepoId SHA256, we use
