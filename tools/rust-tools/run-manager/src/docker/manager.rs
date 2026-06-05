@@ -8,7 +8,9 @@ use psyche_coordinator::{
 };
 use std::env;
 use std::io::{BufRead, BufReader, Cursor};
-use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tokio::signal;
 use tracing::{debug, error, info, warn};
@@ -49,6 +51,11 @@ pub enum ClientLaunch {
 pub struct Entrypoint {
     pub entrypoint: String,
     pub args: Vec<String>,
+}
+
+enum NativeClientExit {
+    Code(i32),
+    Interrupted,
 }
 
 impl RunManager {
@@ -345,10 +352,11 @@ impl RunManager {
         client_version: &Option<String>,
         client_args: &[String],
         entrypoint: &Option<Entrypoint>,
-    ) -> Result<i32> {
+    ) -> Result<NativeClientExit> {
         if entrypoint.is_some() {
             bail!("--entrypoint is only supported in Docker mode");
         }
+        ensure_native_client_binary(client_binary)?;
 
         let (expected_version, native_client_version) =
             self.preflight_native_client(client_version, client_args)?;
@@ -393,16 +401,25 @@ impl RunManager {
             )
         })?;
 
-        let status = tokio::select! {
-            status = child.wait() => status.context("Failed to wait for native Psyche client")?,
+        let (status, interrupted) = tokio::select! {
+            status = child.wait() => {
+                (status.context("Failed to wait for native Psyche client")?, false)
+            },
             _ = signal::ctrl_c() => {
                 info!("\nReceived interrupt signal, stopping native client...");
                 child.start_kill().context("Failed to stop native Psyche client")?;
-                child.wait().await.context("Failed to wait for stopped native Psyche client")?
+                (
+                    child.wait().await.context("Failed to wait for stopped native Psyche client")?,
+                    true,
+                )
             }
         };
 
-        Ok(status.code().unwrap_or(1))
+        if interrupted {
+            Ok(NativeClientExit::Interrupted)
+        } else {
+            Ok(NativeClientExit::Code(status.code().unwrap_or(1)))
+        }
     }
 
     fn preflight_native_client(
@@ -411,7 +428,11 @@ impl RunManager {
         client_args: &[String],
     ) -> Result<(String, Option<String>)> {
         let run_info = self.coordinator_client.get_run_client_info(&self.run_id)?;
-        let Model::LLM(llm) = run_info.model;
+        #[allow(unreachable_patterns)]
+        let llm = match run_info.model {
+            Model::LLM(llm) => llm,
+            _ => bail!("Native client mode only supports LLM runs"),
+        };
 
         if matches!(llm.checkpoint, Checkpoint::Ephemeral) {
             bail!("Native client mode cannot join ephemeral-checkpoint runs");
@@ -473,6 +494,10 @@ impl RunManager {
                 let exit_code = self
                     .run_native_client(client_binary, client_version, client_args, &entrypoint)
                     .await?;
+                let NativeClientExit::Code(exit_code) = exit_code else {
+                    info!("Native client interrupted, shutting down");
+                    return Ok(());
+                };
                 if exit_code == VERSION_MISMATCH_EXIT_CODE {
                     bail!(
                         "Native client exited with version mismatch. Rebuild or select a client binary compatible with run '{}'.",
@@ -725,10 +750,33 @@ fn client_arg_usize(client_args: &[String], flag: &str, env_var: &str) -> Result
         .transpose()
 }
 
+fn ensure_native_client_binary(client_binary: &Path) -> Result<()> {
+    let metadata = std::fs::metadata(client_binary).with_context(|| {
+        format!(
+            "Native client binary '{}' does not exist",
+            client_binary.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        bail!(
+            "Native client path '{}' is not a file",
+            client_binary.display()
+        );
+    }
+
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        bail!(
+            "Native client binary '{}' is not executable",
+            client_binary.display()
+        );
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeDeviceClass {
-    #[allow(dead_code)]
-    Auto,
     Cuda,
     NonCuda,
 }
@@ -768,8 +816,25 @@ fn default_auto_device_class() -> NativeDeviceClass {
 
     #[cfg(not(target_os = "macos"))]
     {
-        NativeDeviceClass::Auto
+        if has_obvious_nvidia_device() {
+            NativeDeviceClass::Cuda
+        } else {
+            NativeDeviceClass::NonCuda
+        }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn has_obvious_nvidia_device() -> bool {
+    if Path::new("/dev/nvidiactl").exists() || Path::new("/dev/nvidia0").exists() {
+        return true;
+    }
+
+    Command::new("nvidia-smi")
+        .arg("-L")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn infer_native_client_version(expected_version: &str) -> Option<String> {
@@ -835,7 +900,7 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
             classify_native_device("auto").unwrap(),
-            NativeDeviceClass::Auto
+            default_auto_device_class()
         );
     }
 

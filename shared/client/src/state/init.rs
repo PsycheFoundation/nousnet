@@ -1,30 +1,30 @@
-use crate::{WandBInfo, fetch_data::DataFetcher};
+use crate::{fetch_data::DataFetcher, WandBInfo};
 use psyche_coordinator::{
-    Coordinator, HealthChecks,
     model::{self, HttpLLMTrainingDataLocation, LLMTrainingDataLocation},
+    Coordinator, HealthChecks,
 };
 use psyche_core::{
     Barrier, CancellableBarrier, IntegrationTestLogMarker, NodeIdentity, Shuffle, TokenSize,
 };
 use psyche_data_provider::{
-    DataProvider, DataProviderTcpClient, DownloadError, DummyDataProvider,
-    PreprocessedDataProvider, Split, WeightedDataProvider, download_dataset_repo_async,
-    download_model_from_gcs_async, download_model_repo_async,
+    download_dataset_repo_async, download_model_from_gcs_async, download_model_repo_async,
     http::{FileURLs, HttpDataProvider},
+    DataProvider, DataProviderTcpClient, DownloadError, DummyDataProvider,
+    PreprocessedDataProvider, Split, WeightedDataProvider,
 };
 use psyche_event_sourcing::event;
 use psyche_metrics::ClientMetrics;
 use psyche_modeling::{
-    AttentionImplementation, AutoConfig, AutoTokenizerError, CausalLM, CommunicatorId,
-    DataParallel, DeepseekForCausalLM, Devices, DummyModel, LlamaConfig, LlamaForCausalLM,
-    LocalTrainer, ModelLoadError, ParallelModels, PretrainedSource, Trainer, auto_tokenizer,
+    auto_tokenizer, AttentionImplementation, AutoConfig, AutoTokenizerError, CausalLM,
+    CommunicatorId, DataParallel, DeepseekForCausalLM, Devices, DummyModel, LlamaConfig,
+    LlamaForCausalLM, LocalTrainer, ModelLoadError, ParallelModels, PretrainedSource, Trainer,
 };
 use psyche_network::{BlobTicket, SecretKey};
 use psyche_watcher::OpportunisticData;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
-use tch::{Kind, Tensor};
+use tch::{Device, Kind, Tensor};
 use thiserror::Error;
-use tokenizers::{ModelWrapper, Tokenizer, models::wordlevel::WordLevel};
+use tokenizers::{models::wordlevel::WordLevel, ModelWrapper, Tokenizer};
 use tokio::{
     io,
     sync::{mpsc::UnboundedSender, oneshot},
@@ -33,11 +33,67 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use super::{
-    CheckpointConfig, FinishedBroadcast, cooldown::CooldownStepMetadata, evals::ModelTaskRunner,
-    stats::StatsLogger, steps::StepStateMachine, train::TrainingStepMetadata,
-    types::DistroBroadcastAndPayload, warmup::WarmupStepMetadata, witness::WitnessStepMetadata,
+    cooldown::CooldownStepMetadata, evals::ModelTaskRunner, stats::StatsLogger,
+    steps::StepStateMachine, train::TrainingStepMetadata, types::DistroBroadcastAndPayload,
+    warmup::WarmupStepMetadata, witness::WitnessStepMetadata, CheckpointConfig, FinishedBroadcast,
 };
 use iroh_blobs::api::Tag;
+
+fn mps_bfloat16_override() -> Option<bool> {
+    match std::env::var("PSYCHE_MPS_BF16") {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "force" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        Err(_) => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn mps_supports_bfloat16() -> bool {
+    if !tch::utils::has_mps() {
+        return false;
+    }
+
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let lhs = Tensor::ones([4, 4], (Kind::BFloat16, Device::Mps));
+        let rhs = Tensor::ones([4, 4], (Kind::BFloat16, Device::Mps));
+        let out = lhs.matmul(&rhs).to(Device::Cpu).to_kind(Kind::Float);
+        let expected = Tensor::full([4, 4], 4.0, (Kind::Float, Device::Cpu));
+        out.allclose(&expected, 1e-3, 1e-3, false)
+    }))
+    .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mps_supports_bfloat16() -> bool {
+    false
+}
+
+fn native_model_kind_for_device(device: Device) -> Kind {
+    if device != Device::Mps {
+        return Kind::BFloat16;
+    }
+
+    match mps_bfloat16_override() {
+        Some(true) => {
+            info!("PSYCHE_MPS_BF16=1 set; using bfloat16 on MPS without the safety probe");
+            Kind::BFloat16
+        }
+        Some(false) => {
+            info!("PSYCHE_MPS_BF16=0 set; using float16 on MPS");
+            Kind::Half
+        }
+        None if mps_supports_bfloat16() => Kind::BFloat16,
+        None => {
+            info!(
+                "MPS bfloat16 probe failed for the native Rust model path; using float16. Set PSYCHE_MPS_BF16=1 to force bfloat16."
+            );
+            Kind::Half
+        }
+    }
+}
 
 pub struct RunInitConfig {
     // identity for connecting to the data server
@@ -116,7 +172,9 @@ pub enum InitRunError {
     #[error("could not parse config: {0}")]
     FailedToParseConfig(#[from] serde_json::Error),
 
-    #[error("P2P model load failed: could not fetch model from peers after exhausting all retries")]
+    #[error(
+        "P2P model load failed: could not fetch model from peers after exhausting all retries"
+    )]
     P2PModelLoad,
 
     #[error("Unsupported architecture: {0}")]
@@ -624,11 +682,12 @@ impl RunInitConfigAndIO {
                                             let device = device.ok_or_else(|| {
                                                 ModelLoadError::NoDeviceForRank(rank, devices)
                                             })?;
+                                            let kind = native_model_kind_for_device(device);
                                             match architecture {
                                                 model::LLMArchitecture::HfLlama => {
                                                     LlamaForCausalLM::from_pretrained(
                                                         &source.try_into()?,
-                                                        Some(Kind::BFloat16),
+                                                        Some(kind),
                                                         attn_implementation,
                                                         Some(device),
                                                         tensor_parallelism_world,
@@ -639,7 +698,7 @@ impl RunInitConfigAndIO {
                                                 model::LLMArchitecture::HfDeepseek => {
                                                     DeepseekForCausalLM::from_pretrained(
                                                         &source.try_into()?,
-                                                        Some(Kind::BFloat16),
+                                                        Some(kind),
                                                         attn_implementation,
                                                         Some(device),
                                                         tensor_parallelism_world,
@@ -834,35 +893,31 @@ impl RunInitConfigAndIO {
             }
             #[cfg(feature = "python")]
             RawLoadedModelType::Python(model) => {
-                vec![
-                    psyche_modeling::LocalTrainer::new(
-                        ParallelModels {
-                            models: vec![Box::new(model) as Box<dyn CausalLM>],
-                            barrier: Arc::new(psyche_modeling::NopBarrier) as Arc<dyn Barrier>,
-                            data_parallel: None,
-                        },
-                        llm.lr_schedule,
-                        llm.optimizer,
-                        init_config.micro_batch_size,
-                        init_config.optim_stats_every_n_steps,
-                        init_config.grad_accum_in_fp32,
-                    )
-                    .into(),
-                ]
+                vec![psyche_modeling::LocalTrainer::new(
+                    ParallelModels {
+                        models: vec![Box::new(model) as Box<dyn CausalLM>],
+                        barrier: Arc::new(psyche_modeling::NopBarrier) as Arc<dyn Barrier>,
+                        data_parallel: None,
+                    },
+                    llm.lr_schedule,
+                    llm.optimizer,
+                    init_config.micro_batch_size,
+                    init_config.optim_stats_every_n_steps,
+                    init_config.grad_accum_in_fp32,
+                )
+                .into()]
             }
             #[cfg(feature = "python")]
             RawLoadedModelType::PythonDistributed(model) => {
-                vec![
-                    psyche_modeling::PythonDistributedTrainer::new(
-                        model,
-                        llm.lr_schedule,
-                        llm.optimizer,
-                        init_config.micro_batch_size,
-                        init_config.optim_stats_every_n_steps,
-                        init_config.grad_accum_in_fp32,
-                    )?
-                    .into(),
-                ]
+                vec![psyche_modeling::PythonDistributedTrainer::new(
+                    model,
+                    llm.lr_schedule,
+                    llm.optimizer,
+                    init_config.micro_batch_size,
+                    init_config.optim_stats_every_n_steps,
+                    init_config.grad_accum_in_fp32,
+                )?
+                .into()]
             }
         };
 

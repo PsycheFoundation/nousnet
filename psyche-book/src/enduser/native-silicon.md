@@ -8,7 +8,7 @@ The production compute-provider path is still Linux + NVIDIA CUDA + Docker. Nati
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| macOS Apple Silicon | Experimental | Single local rank. Uses `--device auto` or `--device mps`. BF16 is used when the local MPS stack passes a runtime BF16 probe. Some PyTorch operations may fall back to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`. |
+| macOS Apple Silicon | Experimental | Single local rank. Uses `--device auto` or `--device mps`. BF16 is used when the local MPS stack passes a basic runtime BF16 probe; otherwise native paths fall back to float16. Some PyTorch operations may fall back to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`, which can be much slower than failing fast. |
 | Linux NVIDIA CUDA | Supported by standard Docker flow | Native mode can be useful for development, but Docker is the recommended compute-provider path. |
 | Windows ARM | Not supported for production training | CPU-only builds may be possible with manual dependency work, but this repository does not provide a tested Windows ARM native accelerator path. |
 | Other accelerators | Not supported | ROCm, Vulkan, DirectML, NPUs, and Apple MPS on non-macOS platforms are not covered by this native helper. |
@@ -21,6 +21,8 @@ Native silicon mode can only join runs that the local client binary can execute:
 - `HfAuto` requires building the client with the `python` feature. On non-CUDA devices it is single-rank only.
 - `Torchtitan` currently requires CUDA and is rejected on non-CUDA native devices.
 - Ephemeral checkpoint runs cannot be joined by native mode.
+
+Apple Silicon native mode is intended for small development runs. Large-vocabulary or long-context runs can still run out of unified memory or become very slow on MPS, especially when PyTorch falls back to CPU for unsupported operations.
 
 For Apple Silicon, keep `DATA_PARALLELISM=1` and `TENSOR_PARALLELISM=1`, or pass:
 
@@ -42,16 +44,18 @@ For `HfAuto` runs, build with Python support:
 scripts/build-native-silicon.sh --python
 ```
 
-The helper uses the Python selected by `PYTHON_SYS_EXECUTABLE`, or `python3` if that variable is unset. That Python must be able to import `torch`.
+The helper uses the Python selected by `PYTHON_SYS_EXECUTABLE`, or `python3` if that variable is unset. That Python must be able to import `torch` for every native build because the Rust client links against libtorch through PyTorch. The `--python` flag additionally enables Python-backed `HfAuto` model support.
 
 On macOS, the helper also patches the built binaries so they can find the PyTorch dynamic libraries at runtime.
 
-Apple Silicon builds keep BF16 enabled when MPS supports it. To override detection:
+Apple Silicon builds keep BF16 enabled when MPS passes a basic numerical BF16 probe. To override detection:
 
 ```bash
-PSYCHE_MPS_BF16=1  # force BF16
+PSYCHE_MPS_BF16=1  # force BF16 and skip the safety probe
 PSYCHE_MPS_BF16=0  # use float16 instead
 ```
+
+Only force BF16 if you know your local macOS, PyTorch, and MPS stack handles BF16 reliably.
 
 ## Solana Wallet Requirements
 
@@ -67,10 +71,12 @@ solana-keygen pubkey ~/.config/solana/psyche-node.json
 Fund that wallet with enough SOL for coordinator transactions on the network you are using. For devnet:
 
 ```bash
-solana airdrop 1 ~/.config/solana/psyche-node.json --url devnet
+solana airdrop 1 "$(solana-keygen pubkey ~/.config/solana/psyche-node.json)" --url devnet
 ```
 
-For mainnet, send SOL to the wallet public key from a wallet or exchange account you control. Keep only the amount needed for operating the node.
+Devnet airdrops can be rate-limited. If the command fails, retry later or use the Solana web faucet.
+
+For mainnet, send native SOL on the Solana network to the wallet public key from a wallet or exchange account you control. Keep only the amount needed for operating the node and topping up transaction fees if the run lasts longer than expected.
 
 Do not commit a private key. Prefer a keypair file with restricted permissions:
 
@@ -82,10 +88,14 @@ Use the keypair path in your run env file:
 
 ```env
 WALLET_PRIVATE_KEY_PATH=/Users/you/.config/solana/psyche-node.json
-RPC=https://api.mainnet-beta.solana.com
-WS_RPC=wss://api.mainnet-beta.solana.com
+RPC=https://your-mainnet-rpc-provider
+WS_RPC=wss://your-mainnet-rpc-provider
 RUN_ID=your-run-id
 ```
+
+Set the keypair path in the env file. `run-manager` loads that file and forwards the raw key material to the native client process; you do not need to set `RAW_WALLET_PRIVATE_KEY` yourself.
+
+Public mainnet RPC endpoints are acceptable for smoke tests, but sustained training participation should use a reliable RPC provider with a matching websocket endpoint.
 
 If the run is permissioned, send the wallet public key to the run administrator and wait for authorization. Native mode forwards the resolved `AUTHORIZER` to the client the same way Docker mode does.
 
@@ -108,7 +118,7 @@ target/debug/run-manager \
   -- --device mps --data-parallelism 1 --tensor-parallelism 1
 ```
 
-If the coordinator requires a client version that cannot be inferred from the local workspace version, pass it explicitly:
+If the coordinator requires a client version that cannot be inferred from the local workspace version, pass it explicitly only after the run administrator confirms this native fork and commit are accepted for the run:
 
 ```bash
 target/debug/run-manager \
@@ -116,5 +126,7 @@ target/debug/run-manager \
   --native-client target/debug/psyche-solana-client \
   --native-client-version v0.2.0
 ```
+
+Do not use `--native-client-version` only to silence the compatibility error. That value is part of the coordinator's client-version gate.
 
 Native mode does not pull the coordinator-selected Docker image. If the run administrator expects only the official Docker client, do not use native mode for that run.

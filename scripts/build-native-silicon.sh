@@ -4,6 +4,15 @@ set -euo pipefail
 profile=debug
 features=()
 
+has_feature() {
+  local wanted="$1"
+  local feature
+  for feature in ${features[@]+"${features[@]}"}; do
+    [[ "$feature" == "$wanted" ]] && return 0
+  done
+  return 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --release)
@@ -24,6 +33,8 @@ Usage: scripts/build-native-silicon.sh [--release] [--python] [--parallelism]
 
 Build run-manager and a native psyche-solana-client for macOS Apple Silicon
 development. Non-CUDA native training is experimental and single-rank only.
+All native builds require a Python environment that can import torch because
+the Rust client links against libtorch through PyTorch.
 
 Options:
   --release      Build release binaries.
@@ -39,12 +50,15 @@ EOF
   esac
 done
 
-if [[ "$(uname -s)" == "Darwin" && " ${features[*]-} " == *" parallelism "* ]]; then
+if [[ "$(uname -s)" == "Darwin" ]] && has_feature "parallelism"; then
   echo "--parallelism uses NCCL/CUDA and is not supported by this Apple Silicon build helper" >&2
   exit 2
 fi
 
-python_bin="${PYTHON_SYS_EXECUTABLE:-$(command -v python3)}"
+python_bin="${PYTHON_SYS_EXECUTABLE:-}"
+if [[ -z "$python_bin" ]]; then
+  python_bin="$(command -v python3 || true)"
+fi
 if [[ -z "$python_bin" ]]; then
   echo "python3 not found; set PYTHON_SYS_EXECUTABLE" >&2
   exit 1
@@ -84,7 +98,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 fi
 
 python_ld_dirs=()
-if [[ " ${features[*]-} " == *" python "* ]]; then
+if has_feature "python"; then
   if "$python_bin" - <<'PY'
 import sys
 raise SystemExit(0 if sys.version_info >= (3, 14) else 1)

@@ -103,7 +103,10 @@ def _mps_supports_bfloat16() -> bool:
         rhs = torch.ones((4, 4), dtype=torch.bfloat16, device=device)
         out = lhs @ rhs
         torch.mps.synchronize()
-        return out.dtype == torch.bfloat16
+        expected = torch.full((4, 4), 4.0, dtype=torch.float32)
+        return out.dtype == torch.bfloat16 and torch.allclose(
+            out.to("cpu", dtype=torch.float32), expected, rtol=1e-3, atol=1e-3
+        )
     except Exception:
         return False
 
@@ -114,6 +117,7 @@ def _mps_safe_dtype(device: torch.device, dtype: torch.dtype) -> torch.dtype:
 
     bf16_override = os.environ.get("PSYCHE_MPS_BF16", "").strip().lower()
     if bf16_override in {"1", "true", "yes", "force"}:
+        print("PSYCHE_MPS_BF16=1 set; using bfloat16 on MPS without the safety probe")
         return dtype
     if bf16_override in {"0", "false", "no", "off"}:
         return torch.float16
@@ -130,7 +134,7 @@ def _attention_implementation_for_device(
     device: torch.device, attn_implementation: str
 ) -> str:
     if device.type != "cuda" and attn_implementation == "flash_attention_2":
-        return "eager"
+        return "sdpa"
     return attn_implementation
 
 
