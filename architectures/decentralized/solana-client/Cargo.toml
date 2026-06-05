@@ -31,6 +31,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 psyche-python-extension-impl = { workspace = true, optional = true }
+
+[target.'cfg(not(windows))'.dependencies]
 tikv-jemallocator.workspace = true
 
 [features]

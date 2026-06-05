@@ -1,6 +1,6 @@
 # Native Silicon Compute
 
-This page covers experimental native compute-provider builds for systems where the standard Docker CUDA flow cannot expose the local accelerator. The primary supported target for this path is Apple Silicon on macOS using Metal Performance Shaders (MPS).
+This page covers experimental native compute-provider builds for systems where the standard Docker CUDA flow cannot expose the local accelerator. The primary supported target for this path is Apple Silicon on macOS using Metal Performance Shaders (MPS). Windows ARM64 is treated as an experimental CPU-only development target.
 
 The production compute-provider path is still Linux + NVIDIA CUDA + Docker. Native silicon mode is useful for development and for runs whose administrator has confirmed that a native client is acceptable.
 
@@ -10,8 +10,8 @@ The production compute-provider path is still Linux + NVIDIA CUDA + Docker. Nati
 | --- | --- | --- |
 | macOS Apple Silicon | Experimental | Single local rank. Uses `--device auto` or `--device mps`. BF16 is used when the local MPS stack passes a basic runtime BF16 probe; otherwise native paths fall back to float16. Some PyTorch operations may fall back to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`, which can be much slower than failing fast. |
 | Linux NVIDIA CUDA | Supported by standard Docker flow | Native mode can be useful for development, but Docker is the recommended compute-provider path. |
-| Windows ARM | Not supported for production training | CPU-only builds may be possible with manual dependency work, but this repository does not provide a tested Windows ARM native accelerator path. |
-| Other accelerators | Not supported | ROCm, Vulkan, DirectML, NPUs, and Apple MPS on non-macOS platforms are not covered by this native helper. |
+| Windows ARM64 | Experimental CPU-only | Uses `--device cpu`. Requires native Windows ARM64 Python with PyTorch installed. DirectML, NPUs, and GPU acceleration are not wired into this client. |
+| Other accelerators | Not supported | ROCm, Vulkan, DirectML, NPUs, and Apple MPS on non-macOS platforms are not covered by these native helpers. |
 
 ## Model Compatibility
 
@@ -30,7 +30,15 @@ For Apple Silicon, keep `DATA_PARALLELISM=1` and `TENSOR_PARALLELISM=1`, or pass
 -- --device mps --data-parallelism 1 --tensor-parallelism 1
 ```
 
+For Windows ARM64, use CPU explicitly:
+
+```powershell
+-- --device cpu --data-parallelism 1 --tensor-parallelism 1
+```
+
 ## Build Native Binaries
+
+### macOS Apple Silicon
 
 From the repository root:
 
@@ -56,6 +64,42 @@ PSYCHE_MPS_BF16=0  # use float16 instead
 ```
 
 Only force BF16 if you know your local macOS, PyTorch, and MPS stack handles BF16 reliably.
+
+### Windows ARM64 CPU
+
+Install native Windows ARM64 Python and a PyTorch build that supports Windows ARM64. The helper expects that Python to import `torch` successfully:
+
+```powershell
+python -c "import platform, torch; print(platform.machine(), torch.__version__)"
+```
+
+Install the Rust Windows ARM64 target:
+
+```powershell
+rustup target add aarch64-pc-windows-msvc
+```
+
+You also need the Microsoft C++ build tools for the ARM64 MSVC target. Run this helper from native Windows ARM64, not from an x64 Windows host.
+
+Then build from the repository root:
+
+```powershell
+scripts\build-native-windows-arm64.ps1
+```
+
+For `HfAuto` runs:
+
+```powershell
+scripts\build-native-windows-arm64.ps1 -Python
+```
+
+The helper writes binaries and a runtime environment script under `target\aarch64-pc-windows-msvc\debug` or `target\aarch64-pc-windows-msvc\release`. Source the environment script before running the binaries in a fresh PowerShell session so Windows can find the PyTorch DLLs:
+
+```powershell
+. .\target\aarch64-pc-windows-msvc\debug\native-windows-arm64-env.ps1
+```
+
+Windows ARM64 native mode is CPU-only and should be verified on the target Windows ARM64 machine before joining any real run. Use it for smoke tests and small development runs, not production training.
 
 ## Solana Wallet Requirements
 
@@ -116,6 +160,17 @@ target/debug/run-manager \
   --env-file ~/.config/psyche/run.env \
   --native-client target/debug/psyche-solana-client \
   -- --device mps --data-parallelism 1 --tensor-parallelism 1
+```
+
+On Windows ARM64, source the generated runtime environment script and run CPU mode:
+
+```powershell
+. .\target\aarch64-pc-windows-msvc\debug\native-windows-arm64-env.ps1
+
+target\aarch64-pc-windows-msvc\debug\run-manager.exe `
+  --env-file "$env:USERPROFILE\.config\psyche\run.env" `
+  --native-client target\aarch64-pc-windows-msvc\debug\psyche-solana-client.exe `
+  -- --device cpu --data-parallelism 1 --tensor-parallelism 1
 ```
 
 If the coordinator requires a client version that cannot be inferred from the local workspace version, pass it explicitly only after the run administrator confirms this native fork and commit are accepted for the run:
