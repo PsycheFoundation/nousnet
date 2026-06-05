@@ -324,6 +324,8 @@ class TorchtitanAuto(CausalLM):
 
         if config.model_type not in TRAIN_SPEC_FN:
             raise ValueError(f"Unsupported model_type `{config.model_type}`")
+        if device.type != "cuda":
+            raise RuntimeError("Torchtitan currently requires a CUDA device")
         train_spec = TRAIN_SPEC_FN[config.model_type]()
 
         model = None

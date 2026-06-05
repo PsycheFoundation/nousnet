@@ -69,7 +69,7 @@ struct CliArgs {
     #[arg(long, value_name = "PATH")]
     native_client: Option<PathBuf>,
 
-    /// CLIENT_VERSION to pass to --native-client. If omitted, native clients skip coordinator version validation.
+    /// CLIENT_VERSION to pass to --native-client. If omitted, run-manager infers it only when the coordinator version matches the local workspace package version.
     #[arg(long)]
     native_client_version: Option<String>,
 

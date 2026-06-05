@@ -1,7 +1,7 @@
 use crate::{CheckpointConfig, WandBInfo};
 
 use crate::UploadInfo;
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use clap::Args;
 use psyche_data_provider::{GcsUploadInfo, HubUploadInfo};
 use psyche_eval::tasktype_from_name;
@@ -191,6 +191,7 @@ pub struct TrainArgs {
 
     #[arg(
         long,
+        env,
         help = "Device(s) to use: auto, cpu, mps, cuda, cuda:N, cuda:X,Y,Z",
         default_value = "auto"
     )]

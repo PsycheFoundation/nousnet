@@ -1,6 +1,8 @@
 import torch
 import json
 import os
+from contextlib import nullcontext
+from functools import lru_cache
 
 from .causal_lm import CausalLM, PretrainedSourceRepoFiles, PretrainedSourceStateDict
 from transformers import (
@@ -26,11 +28,6 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     apply_activation_checkpointing,
     _CHECKPOINT_PREFIX,
 )
-from liger_kernel.transformers.monkey_patch import (
-    _apply_liger_kernel_to_instance,
-    MODEL_TYPE_TO_APPLY_LIGER_FN,
-)
-
 
 # adapted from https://github.com/pytorch/torchtitan/blob/49c6d6fc15ef644e5c3b1003ad4e0d9ea5fcb9a9/torchtitan/parallelisms/parallel_dims.py#L48
 def build_mesh(device_type, pp=1, dp_replicate=1, dp_shard=1, cp=1, tp=1) -> DeviceMesh:
@@ -90,6 +87,73 @@ def auto_config_from_dict(config: dict):
     return config_class.from_dict(config)
 
 
+def _device_context(device: torch.device):
+    if device.type == "cuda":
+        return torch.cuda.device(device.index)
+    return nullcontext()
+
+
+@lru_cache(maxsize=1)
+def _mps_supports_bfloat16() -> bool:
+    if not torch.backends.mps.is_available():
+        return False
+    try:
+        device = torch.device("mps")
+        lhs = torch.ones((4, 4), dtype=torch.bfloat16, device=device)
+        rhs = torch.ones((4, 4), dtype=torch.bfloat16, device=device)
+        out = lhs @ rhs
+        torch.mps.synchronize()
+        return out.dtype == torch.bfloat16
+    except Exception:
+        return False
+
+
+def _mps_safe_dtype(device: torch.device, dtype: torch.dtype) -> torch.dtype:
+    if device.type != "mps" or dtype != torch.bfloat16:
+        return dtype
+
+    bf16_override = os.environ.get("PSYCHE_MPS_BF16", "").strip().lower()
+    if bf16_override in {"1", "true", "yes", "force"}:
+        return dtype
+    if bf16_override in {"0", "false", "no", "off"}:
+        return torch.float16
+    if _mps_supports_bfloat16():
+        return dtype
+
+    print(
+        "MPS bfloat16 probe failed; using float16. Set PSYCHE_MPS_BF16=1 to force bfloat16."
+    )
+    return torch.float16
+
+
+def _attention_implementation_for_device(
+    device: torch.device, attn_implementation: str
+) -> str:
+    if device.type != "cuda" and attn_implementation == "flash_attention_2":
+        return "eager"
+    return attn_implementation
+
+
+def _maybe_apply_liger_kernel(model: torch.nn.Module, config, no_tp: bool):
+    try:
+        from liger_kernel.transformers.monkey_patch import (
+            _apply_liger_kernel_to_instance,
+            MODEL_TYPE_TO_APPLY_LIGER_FN,
+        )
+    except ImportError:
+        print("Skipping Liger kernels because liger_kernel is not installed")
+        return
+
+    if config.model_type not in MODEL_TYPE_TO_APPLY_LIGER_FN:
+        return
+
+    print(f"Applying liger kernels to model type `{config.model_type}`")
+    _apply_liger_kernel_to_instance(
+        model=model,
+        fused_linear_cross_entropy=no_tp,  # liger fused ce can't deal with mixed tensor/dtensors which happens in non-pure-fsdp mode
+    )
+
+
 class HfTransformersAuto(CausalLM):
     def __init__(self, model, config, world_mesh: DeviceMesh, device: torch.device):
         self.model = model
@@ -133,12 +197,22 @@ class HfTransformersAuto(CausalLM):
         if override_max_position_embeddings:
             config.max_position_embeddings = override_max_position_embeddings
 
+        param_dtype = _mps_safe_dtype(device, param_dtype)
+        attn_implementation = _attention_implementation_for_device(
+            device, attn_implementation
+        )
+
         with torch.device("meta"):
             model: torch.nn.Module = AutoModelForCausalLM.from_config(
                 config,
                 attn_implementation=attn_implementation,
             )
-        torch.cuda.set_device(device)
+        if device.type == "cuda":
+            torch.cuda.set_device(device)
+        elif tp != 1 or dp != 1:
+            raise RuntimeError(
+                f"HfAuto only supports dp=1 and tp=1 on non-CUDA devices, got dp={dp}, tp={tp}"
+            )
 
         world_mesh = None
         if tp != 1 or dp != 1:
@@ -247,16 +321,13 @@ class HfTransformersAuto(CausalLM):
         if model.supports_gradient_checkpointing:
             model.gradient_checkpointing_enable()
 
-        if config.model_type in MODEL_TYPE_TO_APPLY_LIGER_FN:
-            print(f"Applying liger kernels to model type `{config.model_type}`")
+        if device.type == "cuda":
             no_tp = tp == 1
-            _apply_liger_kernel_to_instance(
-                model=model,
-                fused_linear_cross_entropy=no_tp,  # liger fused ce can't deal with mixed tensor/dtensors which happens in non-pure-fsdp mode
-            )
+            _maybe_apply_liger_kernel(model, config, no_tp)
 
-        # compile the loss, greatly reduces mem usage for large vocabularies
-        model.loss_function = torch.compile(model.loss_function)
+        if device.type == "cuda":
+            # compile the loss, greatly reduces mem usage for large vocabularies
+            model.loss_function = torch.compile(model.loss_function)
 
         # for super large models, loading the entire model in RAM nproc times can CPU OOM
         # TODO: switch to use torch.distributed.checkpoint.state_dict_loader.load()
@@ -302,9 +373,9 @@ class HfTransformersAuto(CausalLM):
 
         num_logits_to_keep = 0 if num_logits_to_keep is None else num_logits_to_keep
 
-        # need to wrap in a device context or get triton errors when using liger
-        # see https://github.com/linkedin/Liger-Kernel/issues/593#issuecomment-2770160474
-        with torch.cuda.device(input_ids.device.index):
+        # CUDA needs a device context for Liger/Triton kernels. Non-CUDA devices
+        # such as Apple MPS do not have a torch.cuda context.
+        with _device_context(input_ids.device):
             try:
                 ret = self.model(
                     input_ids.contiguous(),

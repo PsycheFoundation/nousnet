@@ -8,9 +8,9 @@ Before joining a run you need to make sure you meet a few requisites:
 
 ### Linux Operating System
 
-The Psyche client currently only runs on modern Linux distributions.
+The standard compute-provider flow runs on modern Linux distributions with NVIDIA CUDA and Docker.
 
-> Experimental: the lower-level client supports native device selection such as `--device mps` for Apple Silicon development builds, but the recommended compute-provider flow uses a Dockerized CUDA client. Joining production or permissioned runs from a native non-Docker client requires a compatible locally built client binary and approval from the run administrator.
+> Experimental: native Apple Silicon development builds can run without Docker using Metal Performance Shaders. See [Native Silicon Compute](./native-silicon.md). Joining production or permissioned runs from a native non-Docker client requires a compatible locally built client binary and approval from the run administrator.
 
 ### NVIDIA GPU and Drivers
 
@@ -81,7 +81,7 @@ Then, you can start training through the run manager running:
 ./run-manager --env-file /path/to/your/.env
 ```
 
-For native-client development on non-Docker accelerators, run a locally built client through run-manager:
+For native-client development on Apple Silicon, first build local native binaries as described in [Native Silicon Compute](./native-silicon.md), then run a locally built client through run-manager:
 
 ```bash
 ./run-manager \
@@ -89,7 +89,7 @@ For native-client development on non-Docker accelerators, run a locally built cl
   --native-client /path/to/psyche-solana-client
 ```
 
-For Apple Silicon, pass device options after `--`:
+Apple Silicon defaults to `--device auto`, which selects MPS when available. You can pass device options after `--` to be explicit:
 
 ```bash
 ./run-manager \

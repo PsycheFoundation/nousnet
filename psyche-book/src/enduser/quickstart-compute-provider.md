@@ -2,6 +2,8 @@
 
 This guide walks you through the complete process of setting up your machine to provide compute to a NousNet training run. It assumes you have been provided the `run-manager` binary by the run administrator.
 
+If you are using Apple Silicon or another machine where Docker cannot expose the local accelerator, see [Native Silicon Compute](./native-silicon.md). The standard compute-provider path below assumes Linux, NVIDIA CUDA, and Docker.
+
 ## Prerequisites Checklist
 
 Before starting, ensure you have:
