@@ -22,7 +22,9 @@ Native silicon mode can only join runs that the local client binary can execute:
 - `Torchtitan` currently requires CUDA and is rejected on non-CUDA native devices.
 - Ephemeral checkpoint runs cannot be joined by native mode.
 
-Apple Silicon native mode is intended for small development runs. Large-vocabulary or long-context runs can still run out of unified memory or become very slow on MPS, especially when PyTorch falls back to CPU for unsupported operations.
+Single-rank Apple Silicon mode means one local worker process, not an automatic short-duration cap. On high-memory systems, some 12B-class Hugging Face checkpoints may load and may complete limited local train/verify steps when the exact run uses modest sequence lengths, small micro-batches, gradient checkpointing, and BF16 or float16 weights. This is not a general 12B support guarantee; viability depends on the exact architecture, vocabulary size, optimizer state, batch shape, PyTorch/MPS behavior, and coordinator configuration.
+
+Loading larger 20B-30B checkpoints on the same machine is not evidence that live training or verification will fit. Sustained runs also use memory for activations, gradients, optimizer state, logits, allocator overhead, and any unsupported MPS operations that fall back to CPU. Long-running native mode should be burn-in tested on the exact run configuration before treating it as a 24/7 provider.
 
 For Apple Silicon, keep `DATA_PARALLELISM=1` and `TENSOR_PARALLELISM=1`, or pass:
 
@@ -63,7 +65,7 @@ PSYCHE_MPS_BF16=1  # force BF16 and skip the safety probe
 PSYCHE_MPS_BF16=0  # use float16 instead
 ```
 
-Only force BF16 if you know your local macOS, PyTorch, and MPS stack handles BF16 reliably.
+BF16 availability on MPS depends on the local macOS, PyTorch, and hardware stack. Only force BF16 if you know that exact stack handles BF16 reliably; use `PSYCHE_MPS_BF16=0` to fall back to float16 when needed.
 
 ### Windows ARM64 CPU
 

@@ -12,12 +12,12 @@ The upstream project and protocol are still Psyche. For the general project docu
 
 ## Native Hardware Status
 
-| Platform            | Status in this fork                       | Notes                                                                                                                                                                                  |
-| ------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS Apple Silicon | Experimental native compute-provider path | Uses native `run-manager`/client binaries with PyTorch MPS for local acceleration. Intended for small development runs and run administrators who explicitly accept this fork/version. |
-| Windows ARM64       | Experimental CPU-only path                | Builds native Windows ARM64 binaries for `--device cpu`. DirectML, NPUs, and Windows GPU acceleration are not wired in.                                                                |
-| Linux NVIDIA CUDA   | Upstream supported path                   | The production path remains Docker + CUDA. This fork does not replace the standard NVIDIA provider flow.                                                                               |
-| Other accelerators  | Not supported                             | ROCm, Vulkan, DirectML, NPUs, and non-macOS MPS are not implemented here.                                                                                                              |
+| Platform            | Status in this fork                       | Notes                                                                                                                                                                                                                             |
+| ------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS Apple Silicon | Experimental native compute-provider path | Uses native `run-manager`/client binaries with PyTorch MPS for local acceleration. Single local rank only. Sustained runs require burn-in on the exact model, sequence length, batch shape, dtype, and coordinator configuration. |
+| Windows ARM64       | Experimental CPU-only path                | Builds native Windows ARM64 binaries for `--device cpu`. DirectML, NPUs, and Windows GPU acceleration are not wired in.                                                                                                           |
+| Linux NVIDIA CUDA   | Upstream supported path                   | The production path remains Docker + CUDA. This fork does not replace the standard NVIDIA provider flow.                                                                                                                          |
+| Other accelerators  | Not supported                             | ROCm, Vulkan, DirectML, NPUs, and non-macOS MPS are not implemented here.                                                                                                                                                         |
 
 ## What This Fork Changes
 
@@ -58,6 +58,19 @@ Apple Silicon runs should use a single local rank:
 -- --device mps --data-parallelism 1 --tensor-parallelism 1
 ```
 
+Single-rank means one local worker process, not an automatic short-duration cap.
+On high-memory Apple Silicon systems, some 12B-class Hugging Face checkpoints
+may load and may complete limited local train/verify steps when the exact run
+uses modest sequence lengths, small micro-batches, gradient checkpointing, and
+BF16 or float16 weights. This is not a general 12B support guarantee; viability
+depends on the exact architecture, vocabulary size, optimizer state, batch
+shape, PyTorch/MPS behavior, and coordinator configuration.
+
+Loading larger 20B-30B checkpoints on the same machine is not evidence that
+live training or verification will fit: sustained runs also use memory for
+activations, gradients, optimizer state, logits, allocator overhead, and any
+unsupported MPS operations that fall back to CPU.
+
 If your local PyTorch/MPS stack has BF16 issues, force float16:
 
 ```bash
@@ -69,6 +82,9 @@ Only force BF16 when you know your stack handles it:
 ```bash
 PSYCHE_MPS_BF16=1
 ```
+
+BF16 availability on MPS depends on the local macOS, PyTorch, and hardware
+stack. Use `PSYCHE_MPS_BF16=0` to fall back to float16 when BF16 is unstable.
 
 ## Windows ARM64 CPU Quick Start
 
