@@ -3,11 +3,11 @@ use anchor_client::solana_sdk::{
 };
 use anchor_lang::AccountDeserialize;
 use anyhow::{Context, Result};
-use psyche_coordinator::{model::Model, RunState};
+use psyche_coordinator::{RunState, model::Model};
 use psyche_solana_authorizer::state::Authorization;
 use psyche_solana_coordinator::{
-    coordinator_account_from_bytes, find_coordinator_instance, logic::JOIN_RUN_AUTHORIZATION_SCOPE,
-    CoordinatorInstance,
+    CoordinatorInstance, coordinator_account_from_bytes, find_coordinator_instance,
+    logic::JOIN_RUN_AUTHORIZATION_SCOPE,
 };
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_client::rpc_client::RpcClient;

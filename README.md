@@ -12,12 +12,12 @@ The upstream project and protocol are still Psyche. For the general project docu
 
 ## Native Hardware Status
 
-| Platform | Status in this fork | Notes |
-| --- | --- | --- |
+| Platform            | Status in this fork                       | Notes                                                                                                                                                                                  |
+| ------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | macOS Apple Silicon | Experimental native compute-provider path | Uses native `run-manager`/client binaries with PyTorch MPS for local acceleration. Intended for small development runs and run administrators who explicitly accept this fork/version. |
-| Windows ARM64 | Experimental CPU-only path | Builds native Windows ARM64 binaries for `--device cpu`. DirectML, NPUs, and Windows GPU acceleration are not wired in. |
-| Linux NVIDIA CUDA | Upstream supported path | The production path remains Docker + CUDA. This fork does not replace the standard NVIDIA provider flow. |
-| Other accelerators | Not supported | ROCm, Vulkan, DirectML, NPUs, and non-macOS MPS are not implemented here. |
+| Windows ARM64       | Experimental CPU-only path                | Builds native Windows ARM64 binaries for `--device cpu`. DirectML, NPUs, and Windows GPU acceleration are not wired in.                                                                |
+| Linux NVIDIA CUDA   | Upstream supported path                   | The production path remains Docker + CUDA. This fork does not replace the standard NVIDIA provider flow.                                                                               |
+| Other accelerators  | Not supported                             | ROCm, Vulkan, DirectML, NPUs, and non-macOS MPS are not implemented here.                                                                                                              |
 
 ## What This Fork Changes
 

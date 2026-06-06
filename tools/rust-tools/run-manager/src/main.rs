@@ -1,11 +1,11 @@
 use anchor_client::{
+    Cluster,
     solana_sdk::{
         commitment_config::CommitmentConfig,
         signature::{EncodableKey, Keypair},
     },
-    Cluster,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use psyche_solana_rpc::SolanaBackend;
 use run_manager::commands::{self, Command};
@@ -30,7 +30,7 @@ use commands::run::{
 use commands::treasury::{CommandTreasurerClaimRewards, CommandTreasurerTopUpRewards};
 use run_manager::docker::coordinator_client::CoordinatorClient;
 use run_manager::docker::{
-    find_joinable_runs, parse_delegate_authorizer_from_env, parse_wallet_pubkey, RunInfo,
+    RunInfo, find_joinable_runs, parse_delegate_authorizer_from_env, parse_wallet_pubkey,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

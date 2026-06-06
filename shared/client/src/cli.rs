@@ -1,7 +1,7 @@
 use crate::{CheckpointConfig, WandBInfo};
 
 use crate::UploadInfo;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use clap::Args;
 use psyche_data_provider::{GcsUploadInfo, HubUploadInfo};
 use psyche_eval::tasktype_from_name;

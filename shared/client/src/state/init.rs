@@ -1,30 +1,30 @@
-use crate::{fetch_data::DataFetcher, WandBInfo};
+use crate::{WandBInfo, fetch_data::DataFetcher};
 use psyche_coordinator::{
-    model::{self, HttpLLMTrainingDataLocation, LLMTrainingDataLocation},
     Coordinator, HealthChecks,
+    model::{self, HttpLLMTrainingDataLocation, LLMTrainingDataLocation},
 };
 use psyche_core::{
     Barrier, CancellableBarrier, IntegrationTestLogMarker, NodeIdentity, Shuffle, TokenSize,
 };
 use psyche_data_provider::{
-    download_dataset_repo_async, download_model_from_gcs_async, download_model_repo_async,
-    http::{FileURLs, HttpDataProvider},
     DataProvider, DataProviderTcpClient, DownloadError, DummyDataProvider,
-    PreprocessedDataProvider, Split, WeightedDataProvider,
+    PreprocessedDataProvider, Split, WeightedDataProvider, download_dataset_repo_async,
+    download_model_from_gcs_async, download_model_repo_async,
+    http::{FileURLs, HttpDataProvider},
 };
 use psyche_event_sourcing::event;
 use psyche_metrics::ClientMetrics;
 use psyche_modeling::{
-    auto_tokenizer, AttentionImplementation, AutoConfig, AutoTokenizerError, CausalLM,
-    CommunicatorId, DataParallel, DeepseekForCausalLM, Devices, DummyModel, LlamaConfig,
-    LlamaForCausalLM, LocalTrainer, ModelLoadError, ParallelModels, PretrainedSource, Trainer,
+    AttentionImplementation, AutoConfig, AutoTokenizerError, CausalLM, CommunicatorId,
+    DataParallel, DeepseekForCausalLM, Devices, DummyModel, LlamaConfig, LlamaForCausalLM,
+    LocalTrainer, ModelLoadError, ParallelModels, PretrainedSource, Trainer, auto_tokenizer,
 };
 use psyche_network::{BlobTicket, SecretKey};
 use psyche_watcher::OpportunisticData;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tch::{Device, Kind, Tensor};
 use thiserror::Error;
-use tokenizers::{models::wordlevel::WordLevel, ModelWrapper, Tokenizer};
+use tokenizers::{ModelWrapper, Tokenizer, models::wordlevel::WordLevel};
 use tokio::{
     io,
     sync::{mpsc::UnboundedSender, oneshot},
@@ -33,9 +33,9 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use super::{
-    cooldown::CooldownStepMetadata, evals::ModelTaskRunner, stats::StatsLogger,
-    steps::StepStateMachine, train::TrainingStepMetadata, types::DistroBroadcastAndPayload,
-    warmup::WarmupStepMetadata, witness::WitnessStepMetadata, CheckpointConfig, FinishedBroadcast,
+    CheckpointConfig, FinishedBroadcast, cooldown::CooldownStepMetadata, evals::ModelTaskRunner,
+    stats::StatsLogger, steps::StepStateMachine, train::TrainingStepMetadata,
+    types::DistroBroadcastAndPayload, warmup::WarmupStepMetadata, witness::WitnessStepMetadata,
 };
 use iroh_blobs::api::Tag;
 
@@ -172,9 +172,7 @@ pub enum InitRunError {
     #[error("could not parse config: {0}")]
     FailedToParseConfig(#[from] serde_json::Error),
 
-    #[error(
-        "P2P model load failed: could not fetch model from peers after exhausting all retries"
-    )]
+    #[error("P2P model load failed: could not fetch model from peers after exhausting all retries")]
     P2PModelLoad,
 
     #[error("Unsupported architecture: {0}")]
@@ -893,31 +891,35 @@ impl RunInitConfigAndIO {
             }
             #[cfg(feature = "python")]
             RawLoadedModelType::Python(model) => {
-                vec![psyche_modeling::LocalTrainer::new(
-                    ParallelModels {
-                        models: vec![Box::new(model) as Box<dyn CausalLM>],
-                        barrier: Arc::new(psyche_modeling::NopBarrier) as Arc<dyn Barrier>,
-                        data_parallel: None,
-                    },
-                    llm.lr_schedule,
-                    llm.optimizer,
-                    init_config.micro_batch_size,
-                    init_config.optim_stats_every_n_steps,
-                    init_config.grad_accum_in_fp32,
-                )
-                .into()]
+                vec![
+                    psyche_modeling::LocalTrainer::new(
+                        ParallelModels {
+                            models: vec![Box::new(model) as Box<dyn CausalLM>],
+                            barrier: Arc::new(psyche_modeling::NopBarrier) as Arc<dyn Barrier>,
+                            data_parallel: None,
+                        },
+                        llm.lr_schedule,
+                        llm.optimizer,
+                        init_config.micro_batch_size,
+                        init_config.optim_stats_every_n_steps,
+                        init_config.grad_accum_in_fp32,
+                    )
+                    .into(),
+                ]
             }
             #[cfg(feature = "python")]
             RawLoadedModelType::PythonDistributed(model) => {
-                vec![psyche_modeling::PythonDistributedTrainer::new(
-                    model,
-                    llm.lr_schedule,
-                    llm.optimizer,
-                    init_config.micro_batch_size,
-                    init_config.optim_stats_every_n_steps,
-                    init_config.grad_accum_in_fp32,
-                )?
-                .into()]
+                vec![
+                    psyche_modeling::PythonDistributedTrainer::new(
+                        model,
+                        llm.lr_schedule,
+                        llm.optimizer,
+                        init_config.micro_batch_size,
+                        init_config.optim_stats_every_n_steps,
+                        init_config.grad_accum_in_fp32,
+                    )?
+                    .into(),
+                ]
             }
         };
 

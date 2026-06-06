@@ -6,12 +6,12 @@ The production compute-provider path is still Linux + NVIDIA CUDA + Docker. Nati
 
 ## Support Matrix
 
-| Platform | Status | Notes |
-| --- | --- | --- |
-| macOS Apple Silicon | Experimental | Single local rank. Uses `--device auto` or `--device mps`. BF16 is used when the local MPS stack passes a basic runtime BF16 probe; otherwise native paths fall back to float16. Some PyTorch operations may fall back to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`, which can be much slower than failing fast. |
-| Linux NVIDIA CUDA | Supported by standard Docker flow | Native mode can be useful for development, but Docker is the recommended compute-provider path. |
-| Windows ARM64 | Experimental CPU-only | Uses `--device cpu`. Requires native Windows ARM64 Python with PyTorch installed. DirectML, NPUs, and GPU acceleration are not wired into this client. |
-| Other accelerators | Not supported | ROCm, Vulkan, DirectML, NPUs, and Apple MPS on non-macOS platforms are not covered by these native helpers. |
+| Platform            | Status                            | Notes                                                                                                                                                                                                                                                                                                              |
+| ------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| macOS Apple Silicon | Experimental                      | Single local rank. Uses `--device auto` or `--device mps`. BF16 is used when the local MPS stack passes a basic runtime BF16 probe; otherwise native paths fall back to float16. Some PyTorch operations may fall back to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`, which can be much slower than failing fast. |
+| Linux NVIDIA CUDA   | Supported by standard Docker flow | Native mode can be useful for development, but Docker is the recommended compute-provider path.                                                                                                                                                                                                                    |
+| Windows ARM64       | Experimental CPU-only             | Uses `--device cpu`. Requires native Windows ARM64 Python with PyTorch installed. DirectML, NPUs, and GPU acceleration are not wired into this client.                                                                                                                                                             |
+| Other accelerators  | Not supported                     | ROCm, Vulkan, DirectML, NPUs, and Apple MPS on non-macOS platforms are not covered by these native helpers.                                                                                                                                                                                                        |
 
 ## Model Compatibility
 

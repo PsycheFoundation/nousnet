@@ -1,10 +1,10 @@
 use anchor_client::solana_sdk::bs58;
 use anchor_client::solana_sdk::pubkey::Pubkey;
 use anchor_client::solana_sdk::signature::{EncodableKey, Keypair, Signer};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use psyche_coordinator::{
-    model::{Checkpoint, LLMArchitecture, Model},
     RunState,
+    model::{Checkpoint, LLMArchitecture, Model},
 };
 use std::env;
 use std::io::{BufRead, BufReader, Cursor};
@@ -15,8 +15,8 @@ use std::process::{Command, Stdio};
 use tokio::signal;
 use tracing::{debug, error, info, warn};
 
-use crate::docker::coordinator_client::CoordinatorClient;
 use crate::docker::RunInfo;
+use crate::docker::coordinator_client::CoordinatorClient;
 use crate::get_env_var;
 use crate::load_and_apply_env_file;
 use crate::load_wallet_key;
@@ -456,7 +456,9 @@ impl RunManager {
 
         match llm.architecture {
             LLMArchitecture::Torchtitan if enforce_non_cuda_limits => {
-                bail!("Torchtitan runs currently require CUDA; native silicon mode cannot join this run.")
+                bail!(
+                    "Torchtitan runs currently require CUDA; native silicon mode cannot join this run."
+                )
             }
             LLMArchitecture::HfAuto if enforce_non_cuda_limits => {
                 warn!(
