@@ -1,7 +1,13 @@
 import torch
 
 from .causal_lm import PretrainedSourceRepoFiles, PretrainedSourceStateDict, CausalLM
+from ..cuda_compat import resolve_device_with_status
 from typing import Optional, Iterable
+
+# Only HfAuto has been tested with CUDA-shaped MPS redirection because it uses
+# SDPA and the mps_compat_context path. Other architectures must opt in after
+# explicit fallback-disabled forward/backward tests.
+MPS_REDIRECT_VALIDATED_ARCHITECTURES = {"HfAuto"}
 
 
 def make_causal_lm(
@@ -16,8 +22,19 @@ def make_causal_lm(
     reduce_dtype: torch.dtype = torch.float32,
     fsdp_modules: Optional[Iterable[str]] = None,
 ) -> CausalLM:
-    if not isinstance(device, torch.device):
-        device = torch.device(device if isinstance(device, str) else f"cuda:{device}")
+    device_resolution = resolve_device_with_status(device)
+    device = device_resolution.resolved
+    if (
+        device_resolution.redirected
+        and architecture not in MPS_REDIRECT_VALIDATED_ARCHITECTURES
+    ):
+        raise RuntimeError(
+            "PSYCHE_CUDA_COMPAT redirected CUDA-shaped device intent to MPS, "
+            f"but architecture={architecture!r} is not validated on MPS. "
+            "Use architecture='HfAuto', request device='mps' explicitly for "
+            "native MPS paths, or disable PSYCHE_CUDA_COMPAT to preserve normal "
+            "CUDA failure behavior."
+        )
     if architecture == "HfAuto":
         from .hf_transformers import HfTransformersAuto
 

@@ -1,9 +1,9 @@
-use anyhow::{Error, Result, anyhow};
+use anyhow::{anyhow, Error, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use psyche_data_provider::download_model_repo_sync;
 use psyche_modeling::{
-    AttentionImplementation, CausalLM, CommunicatorId, Devices, LogitsProcessor, Sampling,
-    TokenOutputStream, auto_model_for_causal_lm_from_pretrained, auto_tokenizer,
+    auto_model_for_causal_lm_from_pretrained, auto_tokenizer, AttentionImplementation, CausalLM,
+    CommunicatorId, Devices, LogitsProcessor, Sampling, TokenOutputStream,
 };
 use std::{
     io::Write,
@@ -69,7 +69,7 @@ Upon my target three fair-shining suns.
 enum AttnImpl {
     Eager,
     Sdpa,
-    #[cfg(feature = "parallelism")]
+    #[cfg(feature = "parallelism-core")]
     FlashAttention2,
 }
 
@@ -78,7 +78,7 @@ impl From<AttnImpl> for AttentionImplementation {
         match val {
             AttnImpl::Eager => AttentionImplementation::Eager,
             AttnImpl::Sdpa => AttentionImplementation::Sdpa,
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "parallelism-core")]
             AttnImpl::FlashAttention2 => AttentionImplementation::FlashAttention2,
         }
     }
@@ -333,12 +333,12 @@ fn main() -> Result<()> {
             }
 
             let id: CommunicatorId = {
-                #[cfg(feature = "parallelism")]
+                #[cfg(feature = "parallelism-core")]
                 {
                     tch::CStore::new().into()
                 }
 
-                #[cfg(not(feature = "parallelism"))]
+                #[cfg(not(feature = "parallelism-core"))]
                 {
                     CommunicatorId::none()
                 }

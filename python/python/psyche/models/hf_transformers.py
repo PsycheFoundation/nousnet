@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from functools import lru_cache
 
 from .causal_lm import CausalLM, PretrainedSourceRepoFiles, PretrainedSourceStateDict
+from ..mps_compat import mps_compat_context
 from transformers import (
     AutoModelForCausalLM,
     GradientCheckpointingLayer,
@@ -571,7 +572,7 @@ class HfTransformersAuto(CausalLM):
 
         # CUDA needs a device context for Liger/Triton kernels. Non-CUDA devices
         # such as Apple MPS do not have a torch.cuda context.
-        with _device_context(input_ids.device):
+        with _device_context(input_ids.device), mps_compat_context(input_ids.device):
             try:
                 ret = self.model(
                     input_ids.contiguous(),

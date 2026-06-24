@@ -1,32 +1,32 @@
 # Native Silicon Compute
 
-This page covers experimental native compute-provider builds for systems where the standard Docker CUDA flow cannot expose the local accelerator. The primary supported target for this path is Apple Silicon on macOS using Metal Performance Shaders (MPS). Windows ARM64 is treated as an experimental CPU-only development target.
+This page covers experimental native compute-provider builds for systems where the standard Docker CUDA flow cannot expose the local accelerator. The primary supported target for this path is macOS native silicon using Metal Performance Shaders (MPS). Windows ARM64 is treated as an experimental CPU-only development target.
 
 The production compute-provider path is still Linux + NVIDIA CUDA + Docker. Native silicon mode is useful for development and for runs whose administrator has confirmed that a native client is acceptable.
 
 ## Support Matrix
 
-| Platform            | Status                            | Notes                                                                                                                                                                                                                                                                                                              |
-| ------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| macOS Apple Silicon | Experimental                      | Single local rank. Uses `--device auto` or `--device mps`. BF16 is used when the local MPS stack passes a basic runtime BF16 probe; otherwise native paths fall back to float16. Some PyTorch operations may fall back to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`, which can be much slower than failing fast. |
-| Linux NVIDIA CUDA   | Supported by standard Docker flow | Native mode can be useful for development, but Docker is the recommended compute-provider path.                                                                                                                                                                                                                    |
-| Windows ARM64       | Experimental CPU-only             | Uses `--device cpu`. Requires native Windows ARM64 Python with PyTorch installed. DirectML, NPUs, and GPU acceleration are not wired into this client.                                                                                                                                                             |
-| Other accelerators  | Not supported                     | ROCm, Vulkan, DirectML, NPUs, and Apple MPS on non-macOS platforms are not covered by these native helpers.                                                                                                                                                                                                        |
+| Platform                   | Status                            | Notes                                                                                                                                                                                                                                                                                                              |
+| -------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| macOS native silicon (MPS) | Experimental                      | Single local rank. Uses `--device auto` or `--device mps`. BF16 is used when the local MPS stack passes a basic runtime BF16 probe; otherwise native paths fall back to float16. Some PyTorch operations may fall back to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`, which can be much slower than failing fast. |
+| Linux NVIDIA CUDA          | Supported by standard Docker flow | Native mode can be useful for development, but Docker is the recommended compute-provider path.                                                                                                                                                                                                                    |
+| Windows ARM64              | Experimental CPU-only             | Uses `--device cpu`. Requires native Windows ARM64 Python with PyTorch installed. DirectML, NPUs, and GPU acceleration are not wired into this client.                                                                                                                                                             |
+| Other accelerators         | Not supported                     | ROCm, Vulkan, DirectML, NPUs, and Apple MPS on non-macOS platforms are not covered by these native helpers.                                                                                                                                                                                                        |
 
 ## Model Compatibility
 
 Native silicon mode can only join runs that the local client binary can execute:
 
-- `HfLlama` and `HfDeepseek` use the native Rust/tch model path and are the safest targets for Apple Silicon development.
+- `HfLlama` and `HfDeepseek` use the native Rust/tch model path and are the safest targets for native silicon development.
 - `HfAuto` requires building the client with the `python` feature. On non-CUDA devices it is single-rank only.
 - `Torchtitan` currently requires CUDA and is rejected on non-CUDA native devices.
 - Ephemeral checkpoint runs cannot be joined by native mode.
 
-Single-rank Apple Silicon mode means one local worker process, not an automatic short-duration cap. On high-memory systems, some 12B-class Hugging Face checkpoints may load and may complete limited local train/verify steps when the exact run uses modest sequence lengths, small micro-batches, gradient checkpointing, and BF16 or float16 weights. This is not a general 12B support guarantee; viability depends on the exact architecture, vocabulary size, optimizer state, batch shape, PyTorch/MPS behavior, and coordinator configuration.
+Single-rank native silicon mode means one local worker process, not an automatic short-duration cap. On high-memory systems, some 12B-class Hugging Face checkpoints may load and may complete limited local train/verify steps when the exact run uses modest sequence lengths, small micro-batches, gradient checkpointing, and BF16 or float16 weights. This is not a general 12B support guarantee; viability depends on the exact architecture, vocabulary size, optimizer state, batch shape, PyTorch/MPS behavior, and coordinator configuration.
 
 Loading larger 20B-30B checkpoints on the same machine is not evidence that live training or verification will fit. Sustained runs also use memory for activations, gradients, optimizer state, logits, allocator overhead, and any unsupported MPS operations that fall back to CPU. Long-running native mode should be burn-in tested on the exact run configuration before treating it as a 24/7 provider.
 
-For Apple Silicon, keep `DATA_PARALLELISM=1` and `TENSOR_PARALLELISM=1`, or pass:
+For native silicon, keep `DATA_PARALLELISM=1` and `TENSOR_PARALLELISM=1`, or pass:
 
 ```bash
 -- --device mps --data-parallelism 1 --tensor-parallelism 1
@@ -40,7 +40,7 @@ For Windows ARM64, use CPU explicitly:
 
 ## Build Native Binaries
 
-### macOS Apple Silicon
+### macOS native silicon
 
 From the repository root:
 
@@ -54,11 +54,29 @@ For `HfAuto` runs, build with Python support:
 scripts/build-native-silicon.sh --python
 ```
 
+The Rust/Python extension feature for native silicon is `apple-silicon`. It
+enables Python-backed model support plus Apple-safe parallel-model code without
+selecting CUDA/NCCL bindings:
+
+```bash
+cargo check -p psyche-python-extension --features apple-silicon
+```
+
+This standalone `cargo check` needs the same environment the build helper sets
+up for you. Because the Rust client links against libtorch through PyTorch, set
+`LIBTORCH_USE_PYTORCH=1` (and `PYTHON_SYS_EXECUTABLE` to the Python that can
+import `torch`). On a newer Python than PyO3 supports (for example Python 3.14
+with PyO3 0.24), also set `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`, or the check
+aborts with "the configured Python interpreter version ... is newer than PyO3's
+maximum supported version". Running `scripts/build-native-silicon.sh --python`
+sets all of these automatically, so prefer the helper unless you specifically
+need a bare `cargo check`.
+
 The helper uses the Python selected by `PYTHON_SYS_EXECUTABLE`, or `python3` if that variable is unset. That Python must be able to import `torch` for every native build because the Rust client links against libtorch through PyTorch. The `--python` flag additionally enables Python-backed `HfAuto` model support.
 
 On macOS, the helper also patches the built binaries so they can find the PyTorch dynamic libraries at runtime.
 
-Apple Silicon builds keep BF16 enabled when MPS passes a basic numerical BF16 probe. To override detection:
+native silicon builds keep BF16 enabled when MPS passes a basic numerical BF16 probe. To override detection:
 
 ```bash
 PSYCHE_MPS_BF16=1  # force BF16 and skip the safety probe
@@ -66,6 +84,26 @@ PSYCHE_MPS_BF16=0  # use float16 instead
 ```
 
 BF16 availability on MPS depends on the local macOS, PyTorch, and hardware stack. Only force BF16 if you know that exact stack handles BF16 reliably; use `PSYCHE_MPS_BF16=0` to fall back to float16 when needed.
+
+For work on PyTorch operations that are missing native MPS kernels, see [native MPS Compatibility](../development/mps-compatibility-layer.md). The compatibility layer is opt-in and is intended to turn proven CPU fallbacks into GPU-backed routes, not to hide unsupported operations behind slower CPU execution.
+
+For validation work, prefer running with `PYTORCH_ENABLE_MPS_FALLBACK=0` so
+unsupported MPS operations fail loudly instead of silently moving part of the run
+to CPU.
+
+`PSYCHE_CUDA_COMPAT=1` turns CUDA-shaped Psyche device requests into MPS requests
+on native silicon and enables Psyche's exact MPS compatibility routes for those
+MPS execution contexts. Set `PSYCHE_CUDA_COMPAT_MPS_ROUTES=0` if you need to test
+against raw PyTorch MPS without Psyche's exact fallback fixes; `0`, `false`,
+`no`, and `off` are accepted false spellings.
+
+For the Python-backed `HfAuto` path, the CUDA-shaped MPS redirect can be checked
+directly:
+
+```bash
+PSYCHE_CUDA_COMPAT=1 scripts/check-sidecar-mps-device.py
+PYTORCH_ENABLE_MPS_FALLBACK=0 PSYCHE_CUDA_COMPAT=1 scripts/check-hfauto-mps-redirect.py
+```
 
 ### Windows ARM64 CPU
 
@@ -155,7 +193,7 @@ target/debug/run-manager \
   --native-client target/debug/psyche-solana-client
 ```
 
-For Apple Silicon, the default `--device auto` selects MPS when available. You can make it explicit:
+For native silicon, the default `--device auto` selects MPS when available. You can make it explicit:
 
 ```bash
 target/debug/run-manager \

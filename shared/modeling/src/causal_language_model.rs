@@ -3,15 +3,15 @@ use crate::{
     PretrainedSource, ReduceType, RoPEConfig, StableVarStoreIterator, StableVariableIterator,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::{fmt::Debug, sync::atomic::AtomicBool};
 use tch::{
-    Device, Kind, Tensor,
     nn::{self, Module},
+    Device, Kind, Tensor,
 };
 
-#[cfg(feature = "parallelism")]
+#[cfg(feature = "cuda-parallelism")]
 use tch::CNCCL;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -117,7 +117,7 @@ impl<M: LanguageModelForward, C: LanguageModelConfig> CausalLanguageModel<M, C> 
 
         let device = device.unwrap_or(Device::cuda_if_available());
 
-        #[cfg(feature = "parallelism")]
+        #[cfg(feature = "cuda-parallelism")]
         let comm = match tensor_parallelism_world {
             #[allow(clippy::arc_with_non_send_sync)]
             // TODO: analyze how we're using Arc here, is this right?
@@ -137,7 +137,7 @@ impl<M: LanguageModelForward, C: LanguageModelConfig> CausalLanguageModel<M, C> 
             None => None,
         };
 
-        #[cfg(not(feature = "parallelism"))]
+        #[cfg(not(feature = "cuda-parallelism"))]
         let comm = match tensor_parallelism_world {
             Some(_) => return Err(ModelLoadError::TensorParallelismNotEnabled),
             None => None,

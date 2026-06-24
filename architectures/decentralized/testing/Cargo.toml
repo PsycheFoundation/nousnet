@@ -26,5 +26,10 @@ serial_test.workspace = true
 rstest.workspace = true
 
 [features]
+apple-silicon = [
+  "python",
+  "psyche-client/apple-silicon",
+  "psyche-python-extension-impl/apple-silicon",
+]
 python = ["psyche-python-extension-impl"]
 parallelism = ["psyche-client/parallelism"]

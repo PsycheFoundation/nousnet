@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::{collections::HashMap, sync::Arc};
 use tch::{
-    Device, TchError, Tensor,
     nn::{self, Module, Shard},
+    Device, TchError, Tensor,
 };
 use torch_sys::IntList;
 
@@ -12,8 +12,8 @@ pub struct ParallelismConfig {
     pub tp: usize,
 }
 
-#[cfg(feature = "parallelism")]
-use tch::{CNCCL, CStore, ReduceOpType};
+#[cfg(feature = "cuda-parallelism")]
+use tch::{CStore, ReduceOpType, CNCCL};
 
 use crate::CausalLM;
 #[cfg(feature = "python")]
@@ -24,13 +24,13 @@ pub enum Communicator {
     None,
     #[cfg(feature = "python")]
     TorchDistributed(TorchDistributedCommunicator),
-    #[cfg(feature = "parallelism")]
+    #[cfg(feature = "cuda-parallelism")]
     NCCL(CNCCL),
 }
 
 unsafe impl Send for Communicator {}
 
-#[cfg(feature = "parallelism")]
+#[cfg(feature = "cuda-parallelism")]
 impl From<CNCCL> for Communicator {
     fn from(value: CNCCL) -> Self {
         Self::NCCL(value)
@@ -54,7 +54,7 @@ impl Communicator {
             Communicator::None => unimplemented!(),
             #[cfg(feature = "python")]
             Communicator::TorchDistributed(dist) => dist.size() as i64,
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.size(),
         }
     }
@@ -64,7 +64,7 @@ impl Communicator {
             Communicator::None => unimplemented!(),
             #[cfg(feature = "python")]
             Communicator::TorchDistributed(dist) => dist.rank() as i64,
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.rank(),
         }
     }
@@ -84,7 +84,7 @@ impl Communicator {
                     .all_reduce(tensors[0].as_ref(), op)
                     .map_err(|x| TchError::Torch(format!("{x}")))
             }
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.all_reduce(tensors, op.into()),
         }
     }
@@ -95,7 +95,7 @@ impl Communicator {
             Communicator::None => unimplemented!(),
             #[cfg(feature = "python")]
             Communicator::TorchDistributed(_) => todo!(),
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.copy_to_model_parallel(tensor),
         }
     }
@@ -106,7 +106,7 @@ impl Communicator {
             Communicator::None => unimplemented!(),
             #[cfg(feature = "python")]
             Communicator::TorchDistributed(_) => todo!(),
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.reduce_from_model_parallel(tensor),
         }
     }
@@ -117,7 +117,7 @@ impl Communicator {
             Communicator::None => unimplemented!(),
             #[cfg(feature = "python")]
             Communicator::TorchDistributed(_) => todo!(),
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.scatter_to_model_parallel(tensor),
         }
     }
@@ -128,7 +128,7 @@ impl Communicator {
             Communicator::None => unimplemented!(),
             #[cfg(feature = "python")]
             Communicator::TorchDistributed(_) => todo!(),
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.gather_from_model_parallel(tensor),
         }
     }
@@ -145,7 +145,7 @@ impl Communicator {
             Communicator::TorchDistributed(torch) => torch
                 .all_gather(output_tensors, input_tensor)
                 .map_err(|x| TchError::Torch(format!("{x}"))),
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => cnccl.all_gather(output_tensors, input_tensor),
         }
     }
@@ -160,7 +160,7 @@ impl Communicator {
             Communicator::None => unimplemented!(),
             #[cfg(feature = "python")]
             Communicator::TorchDistributed(_) => unimplemented!(),
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             Communicator::NCCL(cnccl) => {
                 cnccl.parallel_expand_heads(tensor, cnccl.size(), cnccl.rank(), shape)
             }
@@ -173,7 +173,7 @@ pub enum CommunicatorId {
     None,
     #[cfg(feature = "python")]
     TorchDistributed((String, String)),
-    #[cfg(feature = "parallelism")]
+    #[cfg(feature = "cuda-parallelism")]
     NCCL(Arc<CStore>),
 }
 
@@ -188,7 +188,7 @@ impl CommunicatorId {
     }
 }
 
-#[cfg(feature = "parallelism")]
+#[cfg(feature = "cuda-parallelism")]
 impl From<CStore> for CommunicatorId {
     fn from(value: CStore) -> Self {
         Self::NCCL(Arc::new(value))
@@ -202,7 +202,7 @@ pub enum ReduceType {
     Mean,
 }
 
-#[cfg(feature = "parallelism")]
+#[cfg(feature = "cuda-parallelism")]
 impl From<ReduceType> for ReduceOpType {
     fn from(value: ReduceType) -> Self {
         match value {
@@ -306,7 +306,7 @@ fn _expand_heads(tensor: &Tensor, shape: impl IntList) -> Tensor {
 }
 
 impl ParallelExpandHeads for Tensor {
-    #[cfg(feature = "parallelism")]
+    #[cfg(feature = "parallelism-core")]
     fn parallel_expand_heads(
         &self,
         comm: &Option<Arc<Communicator>>,
@@ -318,7 +318,7 @@ impl ParallelExpandHeads for Tensor {
         }
     }
 
-    #[cfg(not(feature = "parallelism"))]
+    #[cfg(not(feature = "parallelism-core"))]
     fn parallel_expand_heads(
         &self,
         comm: &Option<Arc<Communicator>>,
@@ -547,12 +547,12 @@ pub fn unsharded_cpu_variables(
 }
 
 #[cfg(test)]
-#[cfg(feature = "parallelism")]
+#[cfg(feature = "cuda-parallelism")]
 pub(crate) mod tests {
     use super::*;
     use crate::{set_suggested_env_vars, set_torch_rng_seed};
     use std::sync::{Arc, Barrier, Mutex};
-    use tch::{Device, Kind, Tensor, nn::VarStore};
+    use tch::{nn::VarStore, Device, Kind, Tensor};
 
     fn run_parallel_test<F>(world_size: usize, test_fn: F)
     where

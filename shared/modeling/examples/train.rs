@@ -4,13 +4,13 @@ use psyche_core::{
     Barrier, BatchId, CancellableBarrier, ClosedInterval, CosineLR, OptimizerDefinition, Shuffle,
 };
 use psyche_data_provider::{
-    DataProvider, LengthKnownDataProvider, LocalDataProvider, PreprocessedDataProvider, Split,
-    TokenizedDataProvider, download_model_repo_sync,
+    download_model_repo_sync, DataProvider, LengthKnownDataProvider, LocalDataProvider,
+    PreprocessedDataProvider, Split, TokenizedDataProvider,
 };
 use psyche_modeling::{
+    auto_model_for_causal_lm_from_pretrained, save_tensors_into_safetensors,
     AttentionImplementation, Batch, BatchData, BatchDataCPU, CausalLM, CommunicatorId,
     DataParallel, Devices, LocalTrainer, ModelLoadError, ParallelModels, Trainer,
-    auto_model_for_causal_lm_from_pretrained, save_tensors_into_safetensors,
 };
 use psyche_tui::{logging, setup_ctrl_c};
 use std::{sync::Arc, thread::JoinHandle, time::SystemTime};
@@ -21,7 +21,7 @@ use tracing::info;
 enum AttnImpl {
     Eager,
     Sdpa,
-    #[cfg(feature = "parallelism")]
+    #[cfg(feature = "parallelism-core")]
     FlashAttention2,
 }
 
@@ -30,7 +30,7 @@ impl From<AttnImpl> for AttentionImplementation {
         match val {
             AttnImpl::Eager => AttentionImplementation::Eager,
             AttnImpl::Sdpa => AttentionImplementation::Sdpa,
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "parallelism-core")]
             AttnImpl::FlashAttention2 => AttentionImplementation::FlashAttention2,
         }
     }
@@ -272,7 +272,7 @@ async fn main() -> Result<()> {
     let data_parallel: Option<Vec<(CommunicatorId, Arc<dyn Barrier>)>> =
         if args.data_parallelism.is_some() && !python {
             {
-                #[cfg(feature = "parallelism")]
+                #[cfg(feature = "parallelism-core")]
                 {
                     Some(
                         (0..tp_world_size)
@@ -287,7 +287,7 @@ async fn main() -> Result<()> {
                     )
                 }
 
-                #[cfg(not(feature = "parallelism"))]
+                #[cfg(not(feature = "parallelism-core"))]
                 {
                     anyhow::bail!("Parallelism set but feature off")
                 }
@@ -367,12 +367,12 @@ async fn main() -> Result<()> {
             let trainer_load_handle: JoinHandle<std::result::Result<Trainer, anyhow::Error>> =
                 std::thread::spawn(move || {
                     let id = if tp_world_size > 1 {
-                        #[cfg(feature = "parallelism")]
+                        #[cfg(feature = "parallelism-core")]
                         {
                             Some(tch::CStore::new().into())
                         }
 
-                        #[cfg(not(feature = "parallelism"))]
+                        #[cfg(not(feature = "parallelism-core"))]
                         {
                             anyhow::bail!("Parallelism set but not feature off")
                         }

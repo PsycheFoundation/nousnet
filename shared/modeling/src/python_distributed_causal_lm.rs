@@ -1,18 +1,18 @@
 use crate::{
+    python_causal_lm::{PythonCausalLMError, PythonModelConfig, WrappedPythonCausalLM},
     AttentionImplementation, Batch, BatchData, BatchDataGPU, CausalLM, Communicator,
     ParallelismConfig, PretrainedSource, PythonCausalLM, ReduceType, StableVariableIterator,
-    python_causal_lm::{PythonCausalLMError, PythonModelConfig, WrappedPythonCausalLM},
 };
 
 use psyche_core::BatchId;
-use pyo3::{PyErr, PyResult, Python, prelude::*, types::PyDict};
+use pyo3::{prelude::*, types::PyDict, PyErr, PyResult, Python};
 use pyo3_tch::PyTensor;
 use std::{
     collections::HashMap,
     process::{Child, Command},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
     thread::JoinHandle,
     time::Duration,
@@ -26,8 +26,8 @@ pub enum PythonDistributedCausalLMError {
     #[error("Local device must be rank 0, instead got {0}")]
     LocalNotRankZero(usize),
 
-    #[error("Device {0:?} is not a CUDA device")]
-    NonCUDADevice(Device),
+    #[error("Device {0:?} is not supported by PythonDistributedCausalLM; expected CUDA or MPS")]
+    UnsupportedDevice(Device),
 
     #[error("CUDA not available")]
     CUDANotAvailable,
@@ -43,6 +43,12 @@ pub enum PythonDistributedCausalLMError {
 
     #[error("Calculated world size \"{0}\" is less than number of total GPU processes \"{1}\"")]
     IncompatibleWorldSize(usize, usize),
+
+    #[error("MPS backend supports only single-rank PythonDistributedCausalLM; got world_size={0}. native silicon/MPS does not provide NCCL-style GPU collectives.")]
+    MpsRequiresSingleRank(usize),
+
+    #[error("MPS backend supports only one local rank; got num_local_ranks={0}")]
+    MpsRequiresSingleLocalRank(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +59,18 @@ pub struct TorchDistributedCommunicator {
 }
 
 unsafe impl Send for TorchDistributedCommunicator {}
+
+fn is_cuda_device(device: Device) -> bool {
+    matches!(device, Device::Cuda(_))
+}
+
+fn distributed_barrier_device(device: Device) -> Option<Device> {
+    if is_cuda_device(device) {
+        Some(device)
+    } else {
+        None
+    }
+}
 
 impl TorchDistributedCommunicator {
     pub fn new(
@@ -229,11 +247,27 @@ impl PythonDistributedCausalLM {
         port: Option<u16>,
         num_local_ranks: Option<i64>,
     ) -> Result<Self, PythonDistributedCausalLMError> {
-        if !tch::Cuda::is_available() {
+        let is_mps = matches!(device, Device::Mps);
+        if is_cuda_device(device) && !tch::Cuda::is_available() {
             return Err(PythonDistributedCausalLMError::CUDANotAvailable);
         }
-        let num_local_ranks = num_local_ranks.unwrap_or_else(tch::Cuda::device_count);
         let world_size = parallelism.dp * parallelism.tp;
+        let requested_num_local_ranks = num_local_ranks;
+        let num_local_ranks = if is_mps {
+            if requested_num_local_ranks.unwrap_or(1) != 1 {
+                return Err(PythonDistributedCausalLMError::MpsRequiresSingleLocalRank(
+                    requested_num_local_ranks.unwrap_or(1) as usize,
+                ));
+            }
+            1
+        } else {
+            requested_num_local_ranks.unwrap_or_else(tch::Cuda::device_count)
+        };
+        if is_mps && world_size != 1 {
+            return Err(PythonDistributedCausalLMError::MpsRequiresSingleRank(
+                world_size,
+            ));
+        }
         if world_size < (num_local_ranks as usize) {
             return Err(PythonDistributedCausalLMError::IncompatibleWorldSize(
                 world_size,
@@ -248,9 +282,10 @@ impl PythonDistributedCausalLM {
                 // Does the 0th cuda device *have* to be rank 0?
                 return Err(PythonDistributedCausalLMError::LocalNotRankZero(rank));
             }
-            _ => return Err(PythonDistributedCausalLMError::NonCUDADevice(device)),
+            Device::Mps => 0,
+            _ => return Err(PythonDistributedCausalLMError::UnsupportedDevice(device)),
         };
-        let backend = "nccl".to_string();
+        let backend = if is_mps { "gloo" } else { "nccl" }.to_string();
         let init_method = format!("tcp://0.0.0.0:{}", port.unwrap_or(34567));
         let local: JoinHandle<Result<_, PythonDistributedCausalLMError>> = {
             let backend = backend.clone();
@@ -293,7 +328,7 @@ impl PythonDistributedCausalLM {
                         )?;
 
                         // Wait for all ranks to be ready before broadcasting tensors
-                        comm.barrier(Some(device))?;
+                        comm.barrier(distributed_barrier_device(device))?;
                         info!("Sharing parameters with the other ranks");
 
                         for (name, tensor) in tensors_vec.into_iter() {
@@ -308,8 +343,12 @@ impl PythonDistributedCausalLM {
 
                             debug!("Broadcasting tensor {} to other ranks", name);
 
-                            // To broadcast we have to move the tensor to the GPU
-                            let tensor = tensor.to(device);
+                            let broadcast_device = if is_cuda_device(device) {
+                                device
+                            } else {
+                                Device::Cpu
+                            };
+                            let tensor = tensor.to(broadcast_device);
 
                             if let Err(e) = comm.broadcast(&tensor) {
                                 error!("Error broadcasting tensor {}: {}", name, e);
@@ -317,7 +356,7 @@ impl PythonDistributedCausalLM {
                             }
 
                             // Ensure all ranks have received the tensor before continuing
-                            comm.barrier(Some(device))?;
+                            comm.barrier(distributed_barrier_device(device))?;
                         }
                     }
                 }
@@ -338,6 +377,11 @@ impl PythonDistributedCausalLM {
         debug!("Spawned local model load, pid is {pid}");
         let children: Result<Vec<Child>, _> = (1..num_local_ranks)
             .map(|rank| {
+                let sidecar_device = if is_cuda_device(device) {
+                    format!("cuda:{rank}")
+                } else {
+                    "mps".to_string()
+                };
                 let res = Command::new("python")
                     .arg("-m")
                     .arg("psyche.sidecar")
@@ -352,7 +396,7 @@ impl PythonDistributedCausalLM {
                     .arg("--rank")
                     .arg(format!("{rank}"))
                     .arg("--device")
-                    .arg(format!("{rank}"))
+                    .arg(sidecar_device)
                     .spawn();
                 match res.as_ref() {
                     Ok(child) => debug!("Spawned sidecar process {}", child.id()),
@@ -425,7 +469,8 @@ impl CausalLM for PythonDistributedCausalLM {
         if world_size > 1 {
             trace!(
                 "Checking batch padding: original batch size = {}, world_size = {}",
-                original_batch_size, world_size
+                original_batch_size,
+                world_size
             );
 
             batch.pad(world_size);
@@ -434,7 +479,9 @@ impl CausalLM for PythonDistributedCausalLM {
             if new_size != original_batch_size {
                 trace!(
                     "FSDP: Padded batch from {} to {} samples (world_size={})",
-                    original_batch_size, new_size, world_size
+                    original_batch_size,
+                    new_size,
+                    world_size
                 );
             }
         }
@@ -465,15 +512,22 @@ impl CausalLM for PythonDistributedCausalLM {
             .set(&iteration.to_string(), &operation.to_string())
             .unwrap();
 
-        // barrier to ensure everyone has seen the broadcast
-        self.comm.barrier(Some(self.device())).unwrap();
+        if self.comm.size() > 1 {
+            // Single-rank MPS runs have no sidecars listening for distributed
+            // control messages. Only multi-rank CUDA/NCCL launches need the
+            // sidecar barrier and tensor broadcasts.
+            // barrier to ensure everyone has seen the broadcast
+            self.comm
+                .barrier(distributed_barrier_device(self.device()))
+                .unwrap();
 
-        self.comm.broadcast(&batch_data.input_ids).unwrap();
-        if let Some(labels) = &batch_data.labels {
-            self.comm.broadcast(labels).unwrap();
-        }
-        if let Some(position_ids) = &batch_data.position_ids {
-            self.comm.broadcast(position_ids).unwrap();
+            self.comm.broadcast(&batch_data.input_ids).unwrap();
+            if let Some(labels) = &batch_data.labels {
+                self.comm.broadcast(labels).unwrap();
+            }
+            if let Some(position_ids) = &batch_data.position_ids {
+                self.comm.broadcast(position_ids).unwrap();
+            }
         }
 
         let (logits, loss) = self.local.forward(
@@ -539,8 +593,12 @@ impl CausalLM for PythonDistributedCausalLM {
             .set(&iteration.to_string(), &operation.to_string())
             .unwrap();
 
-        // barrier to ensure everyone has seen the broadcast
-        self.comm.barrier(Some(self.device())).unwrap();
+        if self.comm.size() > 1 {
+            // barrier to ensure everyone has seen the broadcast
+            self.comm
+                .barrier(distributed_barrier_device(self.device()))
+                .unwrap();
+        }
     }
 
     fn convert(&self, state_dict: Option<HashMap<String, Tensor>>) -> HashMap<String, Tensor> {

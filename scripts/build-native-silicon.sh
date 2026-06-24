@@ -31,14 +31,15 @@ while [[ $# -gt 0 ]]; do
             cat <<'EOF'
 Usage: scripts/build-native-silicon.sh [--release] [--python] [--parallelism]
 
-Build run-manager and a native psyche-solana-client for macOS Apple Silicon
+Build run-manager and a native psyche-solana-client for macOS native silicon
 development. Non-CUDA native training is experimental and single-rank only.
 All native builds require a Python environment that can import torch because
 the Rust client links against libtorch through PyTorch.
 
 Options:
   --release      Build release binaries.
-  --python       Build the client with the python feature for HfAuto runs.
+  --python       Build the client with Python support for HfAuto runs.
+                 On Darwin this selects the native-silicon-safe feature set.
   --parallelism  Build with NCCL/CUDA parallelism support. Not supported on macOS.
 EOF
             exit 0
@@ -51,8 +52,12 @@ EOF
 done
 
 if [[ "$(uname -s)" == "Darwin" ]] && has_feature "parallelism"; then
-    echo "--parallelism uses NCCL/CUDA and is not supported by this Apple Silicon build helper" >&2
+    echo "--parallelism uses NCCL/CUDA and is not supported by this native-silicon build helper" >&2
     exit 2
+fi
+
+if [[ "$(uname -s)" == "Darwin" ]] && has_feature "python" && ! has_feature "apple-silicon"; then
+    features+=("apple-silicon")
 fi
 
 python_bin="${PYTHON_SYS_EXECUTABLE:-}"
