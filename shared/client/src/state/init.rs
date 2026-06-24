@@ -22,7 +22,7 @@ use psyche_modeling::{
 use psyche_network::{BlobTicket, SecretKey};
 use psyche_watcher::OpportunisticData;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
-use tch::{Kind, Tensor};
+use tch::{Device, Kind, Tensor};
 use thiserror::Error;
 use tokenizers::{ModelWrapper, Tokenizer, models::wordlevel::WordLevel};
 use tokio::{
@@ -38,6 +38,62 @@ use super::{
     types::DistroBroadcastAndPayload, warmup::WarmupStepMetadata, witness::WitnessStepMetadata,
 };
 use iroh_blobs::api::Tag;
+
+fn mps_bfloat16_override() -> Option<bool> {
+    match std::env::var("PSYCHE_MPS_BF16") {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "force" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        Err(_) => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn mps_supports_bfloat16() -> bool {
+    if !tch::utils::has_mps() {
+        return false;
+    }
+
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let lhs = Tensor::ones([4, 4], (Kind::BFloat16, Device::Mps));
+        let rhs = Tensor::ones([4, 4], (Kind::BFloat16, Device::Mps));
+        let out = lhs.matmul(&rhs).to(Device::Cpu).to_kind(Kind::Float);
+        let expected = Tensor::full([4, 4], 4.0, (Kind::Float, Device::Cpu));
+        out.allclose(&expected, 1e-3, 1e-3, false)
+    }))
+    .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mps_supports_bfloat16() -> bool {
+    false
+}
+
+fn native_model_kind_for_device(device: Device) -> Kind {
+    if device != Device::Mps {
+        return Kind::BFloat16;
+    }
+
+    match mps_bfloat16_override() {
+        Some(true) => {
+            info!("PSYCHE_MPS_BF16=1 set; using bfloat16 on MPS without the safety probe");
+            Kind::BFloat16
+        }
+        Some(false) => {
+            info!("PSYCHE_MPS_BF16=0 set; using float16 on MPS");
+            Kind::Half
+        }
+        None if mps_supports_bfloat16() => Kind::BFloat16,
+        None => {
+            info!(
+                "MPS bfloat16 probe failed for the native Rust model path; using float16. Set PSYCHE_MPS_BF16=1 to force bfloat16."
+            );
+            Kind::Half
+        }
+    }
+}
 
 pub struct RunInitConfig {
     // identity for connecting to the data server
@@ -624,11 +680,12 @@ impl RunInitConfigAndIO {
                                             let device = device.ok_or_else(|| {
                                                 ModelLoadError::NoDeviceForRank(rank, devices)
                                             })?;
+                                            let kind = native_model_kind_for_device(device);
                                             match architecture {
                                                 model::LLMArchitecture::HfLlama => {
                                                     LlamaForCausalLM::from_pretrained(
                                                         &source.try_into()?,
-                                                        Some(Kind::BFloat16),
+                                                        Some(kind),
                                                         attn_implementation,
                                                         Some(device),
                                                         tensor_parallelism_world,
@@ -639,7 +696,7 @@ impl RunInitConfigAndIO {
                                                 model::LLMArchitecture::HfDeepseek => {
                                                     DeepseekForCausalLM::from_pretrained(
                                                         &source.try_into()?,
-                                                        Some(Kind::BFloat16),
+                                                        Some(kind),
                                                         attn_implementation,
                                                         Some(device),
                                                         tensor_parallelism_world,

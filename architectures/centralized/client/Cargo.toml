@@ -31,5 +31,10 @@ psyche-python-extension-impl = { workspace = true, optional = true }
 tikv-jemallocator.workspace = true
 
 [features]
+apple-silicon = [
+  "python",
+  "psyche-client/apple-silicon",
+  "psyche-python-extension-impl/apple-silicon",
+]
 parallelism = ["psyche-client/parallelism"]
 python = ["psyche-python-extension-impl"]

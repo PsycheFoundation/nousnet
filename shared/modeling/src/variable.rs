@@ -1,15 +1,15 @@
 use crate::{
-    Communicator,
     parallelism::{tensor_shard, unsharded_tensor_size},
+    Communicator,
 };
 
 use std::{iter::Iterator, sync::Arc};
 use tch::{
-    Tensor,
     nn::{Shard, VarStore},
+    Tensor,
 };
 
-#[cfg(feature = "parallelism")]
+#[cfg(feature = "parallelism-core")]
 use crate::parallelism::AllGather;
 
 pub trait Variable {
@@ -88,7 +88,7 @@ impl Variable for (String, Tensor, Option<Shard>, Option<Arc<Communicator>>) {
 
     fn gather_full_tensor(&self) -> Tensor {
         match &self.2 {
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "parallelism-core")]
             Some(shard) => {
                 assert!(self.3.is_some());
                 let shards = (0..shard.world_size)
@@ -98,8 +98,8 @@ impl Variable for (String, Tensor, Option<Shard>, Option<Arc<Communicator>>) {
 
                 crate::parallelism::unshard_tensor(shards, shard)
             }
-            #[cfg(not(feature = "parallelism"))]
-            Some(_) => panic!("Sharded tensor without parallelism feature?"),
+            #[cfg(not(feature = "parallelism-core"))]
+            Some(_) => panic!("Sharded tensor without parallelism-core feature?"),
             None => self.1.shallow_clone(),
         }
     }

@@ -191,6 +191,7 @@ pub struct TrainArgs {
 
     #[arg(
         long,
+        env,
         help = "Device(s) to use: auto, cpu, mps, cuda, cuda:N, cuda:X,Y,Z",
         default_value = "auto"
     )]

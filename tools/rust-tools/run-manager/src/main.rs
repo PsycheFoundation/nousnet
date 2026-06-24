@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use psyche_solana_rpc::SolanaBackend;
 use run_manager::commands::{self, Command};
-use run_manager::docker::manager::{Entrypoint, RunManager};
+use run_manager::docker::manager::{ClientLaunch, Entrypoint, RunManager};
 use run_manager::parse_optional_pubkey;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -64,6 +64,14 @@ struct CliArgs {
     /// Use a local Docker image instead of pulling from registry (Docker mode)
     #[arg(long)]
     local: bool,
+
+    /// Run a local psyche-solana-client binary instead of a Docker container
+    #[arg(long, value_name = "PATH")]
+    native_client: Option<PathBuf>,
+
+    /// CLIENT_VERSION to pass to --native-client. If omitted, run-manager infers it only when the coordinator version matches the local workspace package version.
+    #[arg(long)]
+    native_client_version: Option<String>,
 
     /// Only join runs where this pubkey is the join_authority (Docker mode)
     #[arg(long)]
@@ -314,12 +322,18 @@ async fn async_main() -> Result<()> {
             anyhow::anyhow!("--env-file is required for Docker mode. Use 'run-manager --help' to see available commands.")
         })?;
 
+        let native_client_args = if args.native_client.is_some() && args.entrypoint.is_none() {
+            args.entrypoint_args.clone()
+        } else {
+            Vec::new()
+        };
+
         let entrypoint = match args.entrypoint {
             Some(entrypoint) => Some(Entrypoint {
                 entrypoint,
                 args: args.entrypoint_args,
             }),
-            None if !args.entrypoint_args.is_empty() => {
+            None if !args.entrypoint_args.is_empty() && args.native_client.is_none() => {
                 bail!(
                     "unexpected trailing arguments {:?}. did you mean to pass --entrypoint?",
                     args.entrypoint_args
@@ -330,10 +344,19 @@ async fn async_main() -> Result<()> {
 
         let authorizer = parse_optional_pubkey(args.authorizer.as_ref(), "authorizer")?;
 
+        let client_launch = match args.native_client {
+            Some(client_binary) => ClientLaunch::Native {
+                client_binary,
+                client_version: args.native_client_version,
+                client_args: native_client_args,
+            },
+            None => ClientLaunch::Docker { local: args.local },
+        };
+
         let run_mgr = RunManager::new(
             args.coordinator_program_id,
             env_file,
-            args.local,
+            client_launch,
             authorizer,
         )?;
         let result = run_mgr.run(entrypoint).await;

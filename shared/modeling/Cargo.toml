@@ -34,5 +34,6 @@ psyche-tui.workspace = true
 tokio.workspace = true
 
 [features]
-parallelism = ["tch/nccl", "torch-sys/nccl"]
+parallelism-core = []
+cuda-parallelism = ["parallelism-core", "tch/nccl", "torch-sys/nccl"]
 python = ["pyo3", "pyo3-tch"]

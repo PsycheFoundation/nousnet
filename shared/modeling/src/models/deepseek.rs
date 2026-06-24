@@ -1,19 +1,20 @@
 #![allow(clippy::manual_is_multiple_of)]
 
 use crate::{
-    AttentionImplementation, AutoConfig, CausalLanguageModel, ColumnParallelLinear, Communicator,
-    CommunicatorId, EosToks, LanguageModelConfig, LanguageModelForward, ModelLoadError,
-    ParallelExpandHeads, PretrainedSource, RMSNorm, RoPECache, RoPEConfig, RoPEType,
-    RowParallelLinear, rotate_half, yarn_get_mscale,
+    rotate_half, yarn_get_mscale, AttentionImplementation, AutoConfig, CausalLanguageModel,
+    ColumnParallelLinear, Communicator, CommunicatorId, EosToks, LanguageModelConfig,
+    LanguageModelForward, ModelLoadError, ParallelExpandHeads, PretrainedSource, RMSNorm,
+    RoPECache, RoPEConfig, RoPEType, RowParallelLinear,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
 use tch::{
-    Device, Kind, Tensor,
     nn::{
-        self, Init, Module,
+        self,
         init::{FanInOut, NonLinearity, NormalOrUniform},
+        Init, Module,
     },
+    Device, Kind, Tensor,
 };
 use torch_sys::IntList;
 
@@ -373,7 +374,7 @@ impl MLAAttention {
         let mut key_states = Tensor::cat(&[&k_nope, &k_pe], -1);
 
         let y = match self.attn_implementation {
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             AttentionImplementation::FlashAttention2 => {
                 let mut padded_value_states = value_states.shallow_clone();
                 let full_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim;
@@ -743,14 +744,14 @@ impl DeepseekMoE {
         let sorted_tokens =
             hidden_states.index_select(0, &(idxs.divide_scalar_mode(topk_idx.size()[1], "floor")));
 
-        #[cfg(feature = "parallelism")]
+        #[cfg(feature = "parallelism-core")]
         let y = if self.ep_size > 1 {
             self.parallel_expert_computation(&sorted_tokens, &tokens_per_expert)
         } else {
             self.local_expert_computation(&sorted_tokens, &tokens_per_expert)
         };
 
-        #[cfg(not(feature = "parallelism"))]
+        #[cfg(not(feature = "parallelism-core"))]
         let y = self.local_expert_computation(&sorted_tokens, &tokens_per_expert);
 
         let mut new_x = Tensor::empty_like(&y);
@@ -772,7 +773,7 @@ impl DeepseekMoE {
         }
     }
 
-    #[cfg(feature = "parallelism")]
+    #[cfg(feature = "parallelism-core")]
     fn parallel_expert_computation(
         &self,
         _sorted_tokens: &Tensor,
@@ -967,7 +968,7 @@ impl LanguageModelForward for Deepseek {
         }
 
         let sequence_lengths = sequence_lengths.map(|sequence_lengths| {
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             {
                 if self.attn_implementation == AttentionImplementation::FlashAttention2 {
                     crate::attention::create_cu_seqlens(sequence_lengths, x.device())
@@ -976,7 +977,7 @@ impl LanguageModelForward for Deepseek {
                 }
             }
 
-            #[cfg(not(feature = "parallelism"))]
+            #[cfg(not(feature = "cuda-parallelism"))]
             {
                 panic!("`sequence_lengths` only supported for FlashAttention2");
             }

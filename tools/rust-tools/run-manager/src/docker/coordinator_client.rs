@@ -3,7 +3,7 @@ use anchor_client::solana_sdk::{
 };
 use anchor_lang::AccountDeserialize;
 use anyhow::{Context, Result};
-use psyche_coordinator::RunState;
+use psyche_coordinator::{RunState, model::Model};
 use psyche_solana_authorizer::state::Authorization;
 use psyche_solana_coordinator::{
     CoordinatorInstance, coordinator_account_from_bytes, find_coordinator_instance,
@@ -25,6 +25,12 @@ pub struct RunInfo {
     pub min_clients: u16,
     pub epoch_time_secs: u64,
     pub epoch_start_timestamp: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunClientInfo {
+    pub client_version: String,
+    pub model: Model,
 }
 
 fn format_duration_secs(secs: u64) -> String {
@@ -174,22 +180,49 @@ impl CoordinatorClient {
         Ok(instance)
     }
 
-    pub fn get_docker_tag_for_run(&self, run_id: &str, local_docker: bool) -> Result<String> {
+    pub fn get_client_version_for_run(&self, run_id: &str) -> Result<String> {
+        Ok(self.get_run_client_info(run_id)?.client_version)
+    }
+
+    pub fn get_run_client_info(&self, run_id: &str) -> Result<RunClientInfo> {
         info!("Querying coordinator for Run ID: {}", run_id);
 
         let instance = self.fetch_coordinator_data(run_id)?;
 
-        // Fetch the coordinator account to get the client version
-        let coordinator_account_data =
-            self.rpc_client.get_account(&instance.coordinator_account)?;
-        let coordinator_account = coordinator_account_from_bytes(&coordinator_account_data.data)?;
+        // Fetch the coordinator account to get the client version and model.
+        let coordinator_account_data = self
+            .rpc_client
+            .get_account(&instance.coordinator_account)
+            .with_context(|| {
+            format!(
+                "Failed to fetch coordinator account {} for run {}",
+                instance.coordinator_account, run_id
+            )
+        })?;
+        let coordinator_account = coordinator_account_from_bytes(&coordinator_account_data.data)
+            .with_context(|| {
+                format!(
+                    "Failed to deserialize coordinator account {} for run {}",
+                    instance.coordinator_account, run_id
+                )
+            })?;
 
         let client_version = String::from(&coordinator_account.state.client_version);
+        let model = coordinator_account.state.coordinator.model;
 
         info!(
             "Fetched CoordinatorInstance from chain: {{ run_id: {}, coordinator_account: {}, client_version: {} }}",
             instance.run_id, instance.coordinator_account, client_version
         );
+
+        Ok(RunClientInfo {
+            client_version,
+            model,
+        })
+    }
+
+    pub fn get_docker_tag_for_run(&self, run_id: &str, local_docker: bool) -> Result<String> {
+        let client_version = self.get_client_version_for_run(run_id)?;
 
         // Depending on how the version is specified in the Coordinator, we should format
         // it accordingly. When specifing a RepoId SHA256, we use

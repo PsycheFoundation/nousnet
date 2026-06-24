@@ -14,6 +14,7 @@ from .. import (
     DistroResult,
     start_process_watcher,
 )
+from ..cuda_compat import resolve_device_with_status
 from .api import (
     DistroResultsMetadata,
     ForwardOperation,
@@ -36,6 +37,105 @@ DTYPE_MAPPING = {
 }
 
 
+def collective_tensor_device(device: torch.device) -> torch.device:
+    """Use CPU tensors for non-CUDA distributed collectives."""
+
+    return device if device.type == "cuda" else torch.device("cpu")
+
+
+def move_after_collective(
+    tensor: torch.Tensor | None,
+    device: torch.device,
+) -> torch.Tensor | None:
+    if tensor is None:
+        return None
+    return tensor if tensor.device == device else tensor.to(device)
+
+
+def resolve_sidecar_device(device_arg: str | None):
+    if device_arg is None:
+        raise ValueError(
+            "psyche.sidecar requires an explicit --device. Pass cuda:<rank> for "
+            "real CUDA sidecars or mps for the single-rank native silicon path."
+        )
+    device_arg = device_arg.strip()
+    if not device_arg:
+        raise ValueError("psyche.sidecar --device cannot be empty.")
+    if device_arg.isdecimal():
+        # Legacy sidecar boundary: older callers passed integer CUDA ordinals.
+        # Treat them as explicit CUDA-shaped intent, never as generic devices.
+        return resolve_device_with_status(int(device_arg))
+    return resolve_device_with_status(device_arg)
+
+
+def validate_sidecar_backend(device_resolution, backend: str | None) -> None:
+    # This guard only polices the native silicon path. CUDA remains governed by
+    # torch.distributed/PyTorch backend selection below.
+    device = device_resolution.resolved
+    if device.type != "mps" or backend == "gloo":
+        return
+    if backend is None:
+        raise RuntimeError(
+            "An MPS device was requested, but --backend was not specified. "
+            "Use --backend gloo for native silicon."
+        )
+    reason = (
+        "CUDA-shaped device intent was redirected to MPS"
+        if device_resolution.redirected
+        else "An MPS device was requested"
+    )
+    raise RuntimeError(
+        f"{reason}, "
+        f"but backend={backend!r} is CUDA-only or unproven on MPS. "
+        "Use the gloo backend for native silicon."
+    )
+
+
+def validate_sidecar_topology(
+    device_resolution,
+    world_size: int | None,
+    rank: int,
+) -> None:
+    device = device_resolution.resolved
+    if device.type != "mps":
+        return
+    if world_size not in (None, 1):
+        raise RuntimeError(
+            "MPS sidecar support is single-rank only; " f"got world_size={world_size}."
+        )
+    if rank != 0:
+        raise RuntimeError(
+            "MPS sidecar support is single-rank only; "
+            f"got rank={rank}, expected rank=0."
+        )
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--parent-pid", type=int)
+    parser.add_argument(
+        "--backend",
+        type=str,
+        help="Distributed backend. native silicon/MPS requires gloo.",
+    )
+    parser.add_argument("--init-method", type=str)
+    parser.add_argument("--world-size", type=int)
+    parser.add_argument("--rank", type=int, required=True)
+    parser.add_argument(
+        "--device",
+        type=str,
+        required=True,
+    )
+    return parser
+
+
+def resolve_and_validate_sidecar_args(args):
+    device_resolution = resolve_sidecar_device(args.device)
+    validate_sidecar_backend(device_resolution, args.backend)
+    validate_sidecar_topology(device_resolution, args.world_size, args.rank)
+    return device_resolution
+
+
 def receive_distro_results(
     results_len: int,
     metadata: DistroResultsMetadata,
@@ -47,6 +147,7 @@ def receive_distro_results(
     sparse_idxs = []
     sparse_vals = []
     params_len = len(metadata.sparse_idx_size)
+    broadcast_device = collective_tensor_device(device)
 
     for param_index in range(params_len):
         sparse_idx_size = (results_len,) + tuple(metadata.sparse_idx_size[param_index])
@@ -55,15 +156,17 @@ def receive_distro_results(
         sparse_idx = torch.empty(
             sparse_idx_size,
             dtype=DTYPE_MAPPING[metadata.sparse_idx_dtype],
-            device=device,
+            device=broadcast_device,
         )
         sparse_val = torch.empty(
             sparse_val_size,
             dtype=DTYPE_MAPPING[metadata.sparse_val_dtype],
-            device=device,
+            device=broadcast_device,
         )
         dist.broadcast(sparse_idx, 0)
         dist.broadcast(sparse_val, 0)
+        sparse_idx = move_after_collective(sparse_idx, device)
+        sparse_val = move_after_collective(sparse_val, device)
 
         sparse_idxs.append(sparse_idx.chunk(results_len, dim=0))
         sparse_vals.append(sparse_val.chunk(results_len, dim=0))
@@ -93,14 +196,15 @@ def receive_batch(
     batch_has_labels: bool,
     batch_has_position_ids: bool,
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-    input_ids = torch.empty(batch_shape, dtype=torch.long, device=device)
+    broadcast_device = collective_tensor_device(device)
+    input_ids = torch.empty(batch_shape, dtype=torch.long, device=broadcast_device)
     labels = (
-        torch.empty(batch_shape, dtype=torch.long, device=device)
+        torch.empty(batch_shape, dtype=torch.long, device=broadcast_device)
         if batch_has_labels
         else None
     )
     position_ids = (
-        torch.empty(batch_shape, dtype=torch.long, device=device)
+        torch.empty(batch_shape, dtype=torch.long, device=broadcast_device)
         if batch_has_position_ids
         else None
     )
@@ -109,23 +213,21 @@ def receive_batch(
         dist.broadcast(labels, 0)
     if batch_has_position_ids:
         dist.broadcast(position_ids, 0)
+    input_ids = move_after_collective(input_ids, device)
+    labels = move_after_collective(labels, device) if labels is not None else None
+    position_ids = (
+        move_after_collective(position_ids, device)
+        if position_ids is not None
+        else None
+    )
     return (input_ids, labels, position_ids)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--parent-pid", type=int)
-    parser.add_argument("--backend", type=str)
-    parser.add_argument("--init-method", type=str)
-    parser.add_argument("--world-size", type=int)
-    parser.add_argument("--rank", type=int, required=True)
-    parser.add_argument(
-        "--device",
-        type=int,
-    )
-
+    parser = build_arg_parser()
     args = parser.parse_args()
+    device_resolution = resolve_and_validate_sidecar_args(args)
+    device = device_resolution.resolved
 
     if args.parent_pid:
         start_process_watcher(args.parent_pid, timedelta(seconds=1))
@@ -155,7 +257,12 @@ def main():
     )
 
     def barrier():
-        dist.barrier(device_ids=[args.device] if args.device is not None else None)
+        device_ids = (
+            [device.index]
+            if device.type == "cuda" and device.index is not None
+            else None
+        )
+        dist.barrier(device_ids=device_ids)
 
     architecture = store.get("architecture").decode()
     source = store.get("source").decode()
@@ -189,8 +296,11 @@ def main():
             }
             tensor_dtype = dtype_map.get(tensor_dtype_str, torch.float32)
 
-            # Create empty tensor to overwrite with the broadcasted tensor
-            tensor = torch.empty(tensor_shape, dtype=tensor_dtype, device=args.device)
+            # Keep distributed state transfer on CPU. HfTransformersAuto moves
+            # the meta model to the resolved device with to_empty(device=...)
+            # and _copy_state_tensor copies these CPU source tensors into the
+            # target-device model tensors.
+            tensor = torch.empty(tensor_shape, dtype=tensor_dtype, device="cpu")
 
             dist.broadcast(tensor, 0)
             barrier()
@@ -206,13 +316,13 @@ def main():
     dp = int(store.get("dp").decode())
     tp = int(store.get("tp").decode())
 
-    device = args.device if args.device else 0
+    attn_implementation = "flash_attention_2" if device.type == "cuda" else "sdpa"
 
     model = make_causal_lm(
         architecture,
         source,
         device,
-        attn_implementation="flash_attention_2",
+        attn_implementation=attn_implementation,
         dp=dp,
         tp=tp,
     )
@@ -282,8 +392,13 @@ def main():
                 prev_self_distro_results,
             )
 
-            loss = torch.Tensor([loss]).to(device=device, dtype=torch.float32)
+            loss = torch.tensor(
+                [loss],
+                dtype=torch.float32,
+                device=collective_tensor_device(device),
+            )
             dist.all_reduce(loss)
+            loss = move_after_collective(loss, device)
         elif operation["operation"] == "optimize":
             if trainer is None:
                 raise RuntimeError(
@@ -351,4 +466,5 @@ def main():
         iteration += 1
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,7 @@ use crate::{
     AttentionImplementation, ColumnParallelLinear, Communicator, RoPECache, RowParallelLinear,
 };
 use std::sync::Arc;
-use tch::{Device, Tensor, nn::Module};
+use tch::{nn::Module, Device, Tensor};
 
 fn repeat_kv(hidden_states: &Tensor, n_rep: i64) -> Tensor {
     let (batch, num_key_value_heads, slen, head_dim) = hidden_states.size4().unwrap();
@@ -147,7 +147,7 @@ impl CausalSelfAttention {
         let scale = 1.0 / (self.head_dim as f64).sqrt();
 
         let y = match self.attn_implementation {
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             AttentionImplementation::FlashAttention2 => {
                 let (cum_seq, max_len) = match sequence_lengths {
                     Some((cum_seq, max_len)) => (Some(cum_seq), *max_len as i64),

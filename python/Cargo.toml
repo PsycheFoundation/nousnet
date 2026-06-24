@@ -12,4 +12,5 @@ crate-type = ["cdylib"]
 psyche-python-extension-impl.workspace = true
 
 [features]
+apple-silicon = ["psyche-python-extension-impl/apple-silicon"]
 parallelism = ["psyche-python-extension-impl/parallelism"]

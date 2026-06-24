@@ -1,6 +1,6 @@
 use crate::{
-    DeepseekConfig, Devices, LlamaConfig, LoadSafetensorsError, parallelism::tensor_shard,
-    safetensor_utils::load_safetensors_into_variables,
+    parallelism::tensor_shard, safetensor_utils::load_safetensors_into_variables, DeepseekConfig,
+    Devices, LlamaConfig, LoadSafetensorsError,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -28,13 +28,17 @@ pub enum ModelLoadError {
     #[error("this model uses tied embeddings, which aren't supported.")]
     ModelHasTiedEmbeddings,
 
-    #[error("Directly setting attention implementation to FlashAttention-2 is unsupported for now")]
+    #[error(
+        "Directly setting attention implementation to FlashAttention-2 is unsupported for now"
+    )]
     ModelExplicitlyUsesFA2,
 
     #[error("Failed to initialize CNCCL for tensor parallelism {0}")]
     TensorParallelismFailedInit(tch::TchError),
 
-    #[error("Tried to use tensor parallelism with feature \"parallelism\" disabled")]
+    #[error(
+        "Tried to use CUDA/NCCL tensor parallelism with feature \"cuda-parallelism\" disabled"
+    )]
     TensorParallelismNotEnabled,
 
     #[error("Failed to load safetensors from disk: {0}")]
@@ -148,7 +152,7 @@ pub enum AttentionImplementation {
     #[serde(rename = "sdpa")]
     #[default]
     Sdpa,
-    #[cfg(feature = "parallelism")]
+    #[cfg(feature = "cuda-parallelism")]
     #[serde(rename = "flash_attention_2")]
     FlashAttention2,
 }
@@ -158,7 +162,7 @@ impl AttentionImplementation {
         match self {
             AttentionImplementation::Eager => "eager",
             AttentionImplementation::Sdpa => "sdpa",
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             AttentionImplementation::FlashAttention2 => "flash_attention_2",
         }
     }

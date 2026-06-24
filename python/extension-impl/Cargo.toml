@@ -17,4 +17,5 @@ take_mut = "0.2.2"
 tracing.workspace = true
 
 [features]
-parallelism = ["psyche-modeling/parallelism"]
+apple-silicon = ["psyche-modeling/parallelism-core"]
+parallelism = ["psyche-modeling/cuda-parallelism"]

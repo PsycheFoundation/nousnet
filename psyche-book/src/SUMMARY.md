@@ -4,6 +4,7 @@
 
 - [End-user usage](./enduser/index.md)
   - [Quickstart: Compute Provider](./enduser/quickstart-compute-provider.md)
+  - [Native Silicon Compute](./enduser/native-silicon.md)
   - [Joining a run](./enduser/join-run.md)
   - [Creating a run](./enduser/create-run.md)
   - [Run configuration](./enduser/run-config.md)
@@ -24,6 +25,8 @@
   - [Running off-chain](./development/running-offchain.md)
   - [Cluster Observer](./development/observer.md)
   - [Implementing Models](./development/models.md)
+  - [Apple Silicon MPS Compatibility](./development/mps-compatibility-layer.md)
+  - [Apple Silicon CUDA Compatibility Levels](./development/cuda-compatibility-layer.md)
   - [Python](./development/python.md)
   - [Secrets](./development/agenix.md)
   - [Building these docs](./development/book.md)

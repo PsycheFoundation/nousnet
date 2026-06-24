@@ -39,5 +39,10 @@ sysinfo = "0.32.0"
 iroh-blobs.workspace = true
 
 [features]
-parallelism = ["psyche-modeling/parallelism"]
+apple-silicon = [
+  "python",
+  "psyche-modeling/parallelism-core",
+  "psyche-python-extension-impl/apple-silicon",
+]
+parallelism = ["psyche-modeling/cuda-parallelism"]
 python = ["psyche-python-extension-impl"]

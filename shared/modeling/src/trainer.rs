@@ -1,7 +1,7 @@
 use crate::{
-    AllReduce, CausalLM, Communicator, CommunicatorId, CudaSynchronize, Distro, DistroResult,
-    EosToks, Fp32GradientAccumulator, Optimizer, ReduceType, StableVariableIterator,
-    unsharded_cpu_variables,
+    unsharded_cpu_variables, AllReduce, CausalLM, Communicator, CommunicatorId, CudaSynchronize,
+    Distro, DistroResult, EosToks, Fp32GradientAccumulator, Optimizer, ReduceType,
+    StableVariableIterator,
 };
 use anyhow::{Error, Result};
 use psyche_core::{Barrier, BatchId, LearningRateSchedule, OptimizerDefinition};
@@ -9,8 +9,8 @@ use std::{
     collections::HashMap,
     ops::ControlFlow,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::Instant,
 };
@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
 
-#[cfg(feature = "parallelism")]
+#[cfg(feature = "cuda-parallelism")]
 use tch::CNCCL;
 
 pub struct ParallelModels {
@@ -149,7 +149,9 @@ impl Batch {
                     let padding_needed = world_size - remainder;
                     trace!(
                         "Batch size {} not divisible by world_size {}. Adding {} padding samples",
-                        current_batch_size, world_size, padding_needed
+                        current_batch_size,
+                        world_size,
+                        padding_needed
                     );
 
                     // Get sequence length from the first sample
@@ -185,7 +187,9 @@ impl Batch {
                     let padding_needed = world_size - remainder;
                     trace!(
                         "Batch size {} not divisible by world_size {}. Adding {} padding samples",
-                        current_batch_size, world_size, padding_needed
+                        current_batch_size,
+                        world_size,
+                        padding_needed
                     );
 
                     if current_batch_size == 0 {
@@ -756,7 +760,7 @@ impl LocalTrainer {
         #[allow(unused_mut)]
         let mut data_parallel: Option<(Arc<Communicator>, Arc<dyn Barrier>)> = None;
 
-        #[cfg(feature = "parallelism")]
+        #[cfg(feature = "cuda-parallelism")]
         if let Some(data_parallel_def) = data_parallel_def {
             let id = match data_parallel_def.id {
                 CommunicatorId::NCCL(cstore) => cstore,
@@ -782,9 +786,9 @@ impl LocalTrainer {
             ))
         };
 
-        #[cfg(not(feature = "parallelism"))]
+        #[cfg(not(feature = "cuda-parallelism"))]
         if data_parallel_def.is_some() {
-            error!("DP with parallelism feature off");
+            error!("DP requires the cuda-parallelism feature");
             return;
         }
 

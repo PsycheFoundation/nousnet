@@ -1128,7 +1128,7 @@ mod tests {
 }
 
 // #[cfg(test)]
-// #[cfg(feature = "parallelism")]
+// #[cfg(feature = "parallelism-core")]
 // mod tp_tests {
 //     use super::*;
 //     use crate::tensor_parallelism::CommunicatorId;

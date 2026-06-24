@@ -1,13 +1,13 @@
 use crate::{
-    AttentionImplementation, AutoConfig, CausalLanguageModel, CausalSelfAttention,
-    ColumnParallelLinear, CommunicatorId, EosToks, LanguageModelConfig, LanguageModelForward,
-    ModelLoadError, PretrainedSource, RMSNorm, RoPECache, RoPEConfig, RowParallelLinear,
-    default_rope, parallelism::Communicator,
+    default_rope, parallelism::Communicator, AttentionImplementation, AutoConfig,
+    CausalLanguageModel, CausalSelfAttention, ColumnParallelLinear, CommunicatorId, EosToks,
+    LanguageModelConfig, LanguageModelForward, ModelLoadError, PretrainedSource, RMSNorm,
+    RoPECache, RoPEConfig, RowParallelLinear,
 };
 use std::sync::Arc;
 use tch::{
-    Device, Kind, Tensor,
     nn::{self, Module},
+    Device, Kind, Tensor,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -234,7 +234,7 @@ impl LanguageModelForward for Llama {
         _training: bool,
     ) -> Tensor {
         let sequence_lengths = sequence_lengths.map(|sequence_lengths| {
-            #[cfg(feature = "parallelism")]
+            #[cfg(feature = "cuda-parallelism")]
             {
                 if self.attn_implementation == AttentionImplementation::FlashAttention2 {
                     crate::attention::create_cu_seqlens(sequence_lengths, x.device())
@@ -243,7 +243,7 @@ impl LanguageModelForward for Llama {
                 }
             }
 
-            #[cfg(not(feature = "parallelism"))]
+            #[cfg(not(feature = "cuda-parallelism"))]
             {
                 panic!("`sequence_lengths` only supported for FlashAttention2");
             }
