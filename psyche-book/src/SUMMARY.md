@@ -26,6 +26,7 @@
   - [Cluster Observer](./development/observer.md)
   - [Implementing Models](./development/models.md)
   - [Apple Silicon MPS Compatibility](./development/mps-compatibility-layer.md)
+  - [Apple Silicon CUDA Compatibility Levels](./development/cuda-compatibility-layer.md)
   - [Python](./development/python.md)
   - [Secrets](./development/agenix.md)
   - [Building these docs](./development/book.md)
