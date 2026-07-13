@@ -21,7 +21,11 @@ use psyche_modeling::{
 };
 use psyche_network::{BlobTicket, SecretKey};
 use psyche_watcher::OpportunisticData;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tch::{Kind, Tensor};
 use thiserror::Error;
 use tokenizers::{ModelWrapper, Tokenizer, models::wordlevel::WordLevel};
@@ -152,6 +156,24 @@ struct RawLoadedModel {
 
 type OneshotModelParameterSender = oneshot::Sender<HashMap<String, Tensor>>;
 type OneShotModelConfigSender = oneshot::Sender<(String, Tokenizer, Vec<String>)>;
+
+fn is_checkpoint_extra_file(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    matches!(
+        file_name,
+        "added_tokens.json"
+            | "config.json"
+            | "generation_config.json"
+            | "merges.txt"
+            | "special_tokens_map.json"
+            | "tokenizer.json"
+            | "tokenizer_config.json"
+            | "vocab.json"
+    ) || file_name.ends_with(".py")
+}
 
 pub struct RunInitConfigAndIO {
     pub init_config: RunInitConfig,
@@ -369,14 +391,7 @@ impl RunInitConfigAndIO {
                                 let repo_files = model_is_local;
                                 let checkpoint_extra_files = repo_files
                                     .iter()
-                                    .filter(|file| {
-                                        file.ends_with("config.json")
-                                            || file.ends_with("tokenizer.json")
-                                            || file.ends_with("tokenizer_config.json")
-                                            || file.ends_with("special_tokens_map.json")
-                                            || file.ends_with("generation_config.json")
-                                            || file.ends_with(".py")
-                                    })
+                                    .filter(|file| is_checkpoint_extra_file(file))
                                     .cloned()
                                     .collect();
                                 let tokenizer = Arc::new(auto_tokenizer(&repo_files)?);
@@ -481,14 +496,7 @@ impl RunInitConfigAndIO {
 
                                 let checkpoint_extra_files = repo_files
                                     .iter()
-                                    .filter(|file| {
-                                        file.ends_with("config.json")
-                                            || file.ends_with("tokenizer.json")
-                                            || file.ends_with("tokenizer_config.json")
-                                            || file.ends_with("special_tokens_map.json")
-                                            || file.ends_with("generation_config.json")
-                                            || file.ends_with(".py")
-                                    })
+                                    .filter(|file| is_checkpoint_extra_file(file))
                                     .cloned()
                                     .collect();
                                 let tokenizer = Arc::new(auto_tokenizer(&repo_files)?);
@@ -917,5 +925,42 @@ impl RunInitConfigAndIO {
             tx_broadcast_finished,
             stats_logger,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_checkpoint_extra_file;
+    use std::path::Path;
+
+    #[test]
+    fn checkpoint_extra_file_filter_includes_model_metadata() {
+        for file_name in [
+            "added_tokens.json",
+            "config.json",
+            "generation_config.json",
+            "merges.txt",
+            "special_tokens_map.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "vocab.json",
+            "modeling_custom.py",
+        ] {
+            assert!(
+                is_checkpoint_extra_file(Path::new(file_name)),
+                "expected {file_name} to be included"
+            );
+        }
+
+        for file_name in [
+            "model.safetensors",
+            "model.safetensors.index.json",
+            "README.md",
+        ] {
+            assert!(
+                !is_checkpoint_extra_file(Path::new(file_name)),
+                "expected {file_name} to be excluded"
+            );
+        }
     }
 }

@@ -13,7 +13,7 @@ use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-const MODEL_EXTENSIONS: [&str; 3] = [".safetensors", ".json", ".py"];
+const MODEL_EXTENSIONS: [&str; 4] = [".safetensors", ".json", ".py", ".txt"];
 const DATASET_EXTENSIONS: [&str; 1] = [".parquet"];
 
 /// Strip leading/trailing whitespace and control characters from a repo identifier.
@@ -273,4 +273,23 @@ pub async fn upload_to_hub(
         .map_err(|_| UploadError::SendCheckpoint)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_extensions, MODEL_EXTENSIONS};
+    use hf_hub::api::Siblings;
+
+    #[test]
+    fn model_extensions_include_tokenizer_merges() {
+        let merges = Siblings {
+            rfilename: "merges.txt".to_string(),
+        };
+        let readme = Siblings {
+            rfilename: "README.md".to_string(),
+        };
+
+        assert!(check_extensions(&merges, &MODEL_EXTENSIONS));
+        assert!(!check_extensions(&readme, &MODEL_EXTENSIONS));
+    }
 }
