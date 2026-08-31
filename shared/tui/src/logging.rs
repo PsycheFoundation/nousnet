@@ -25,7 +25,7 @@ use ratatui::{
     widgets::{Block, Widget},
 };
 use tracing::Level;
-use tracing_subscriber::{EnvFilter, Layer, filter::FromEnvError, fmt};
+use tracing_subscriber::{EnvFilter, Layer, filter::FromEnvError, filter::LevelFilter, fmt};
 use tui_logger::{TuiLoggerLevelOutput, TuiLoggerWidget, TuiWidgetEvent, TuiWidgetState};
 
 #[derive(Clone, Debug, Copy, ValueEnum, PartialEq)]
@@ -572,11 +572,23 @@ fn init_logging_core(
 
     // add output layer
     match output {
-        LogOutput::TUI => layers.push(
-            tui_logger::tracing_subscriber_layer()
-                .with_filter(output_logs_filter)
-                .boxed(),
-        ),
+        LogOutput::TUI => {
+            layers.push(
+                tui_logger::tracing_subscriber_layer()
+                    .with_filter(output_logs_filter)
+                    .boxed(),
+            );
+            // The TUI log widget is torn down with the alternate screen on exit
+            // or panic, taking its contents with it. Mirror error-level events
+            // to stderr as well, so a failure is still readable in the terminal
+            // once the TUI is gone.
+            layers.push(
+                fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .with_filter(LevelFilter::ERROR)
+                    .boxed(),
+            );
+        }
         LogOutput::TUIAndConsole => {
             layers.push(
                 tui_logger::tracing_subscriber_layer()
