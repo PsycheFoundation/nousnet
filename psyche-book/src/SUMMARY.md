@@ -16,6 +16,7 @@
   - [Model sharing](./explain/model-sharing.md)
   - [GCS Checkpoints](./explain/gcs-checkpoints.md)
   - [Rewards](./explain/rewards.md)
+  - [DisTrO](./explain/distro.md)
   - [Glossary](./explain/glossary.md)
 
 - [Development](./development/index.md)
