@@ -53,7 +53,7 @@ We also support loading data from GCP as a subsection of the HTTP data provider.
 The required configuration depends on the data provider implementation being used:
 
 1. **TCP Server**:
-   - If the data provider is configured as a TCP server, and an additional file named `data.toml` is required.
+   - If the data provider is configured as a TCP server, an additional file named `data.toml` is required.
    - This file contains the configuration required for the TCP server, including:
      - Data location
      - Token size
