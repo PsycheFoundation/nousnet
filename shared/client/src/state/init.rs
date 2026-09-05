@@ -39,6 +39,29 @@ use super::{
 };
 use iroh_blobs::api::Tag;
 
+/// Files from the model's repo that are re-uploaded alongside every
+/// checkpoint safetensors file, so a checkpoint repo remains a complete,
+/// loadable model repository on its own.
+const CHECKPOINT_EXTRA_FILE_NAMES: [&str; 10] = [
+    "added_tokens.json",
+    "config.json",
+    "generation_config.json",
+    "merges.txt",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "tokenizer.model",
+    "vocab.json",
+    "chat_template.jinja",
+];
+
+fn is_checkpoint_extra_file(file: &PathBuf) -> bool {
+    let Some(name) = file.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    CHECKPOINT_EXTRA_FILE_NAMES.contains(&name) || name.ends_with(".py")
+}
+
 pub struct RunInitConfig {
     // identity for connecting to the data server
     pub identity: NodeIdentity,
@@ -369,14 +392,7 @@ impl RunInitConfigAndIO {
                                 let repo_files = model_is_local;
                                 let checkpoint_extra_files = repo_files
                                     .iter()
-                                    .filter(|file| {
-                                        file.ends_with("config.json")
-                                            || file.ends_with("tokenizer.json")
-                                            || file.ends_with("tokenizer_config.json")
-                                            || file.ends_with("special_tokens_map.json")
-                                            || file.ends_with("generation_config.json")
-                                            || file.ends_with(".py")
-                                    })
+                                    .filter(|file| is_checkpoint_extra_file(file))
                                     .cloned()
                                     .collect();
                                 let tokenizer = Arc::new(auto_tokenizer(&repo_files)?);
@@ -481,14 +497,7 @@ impl RunInitConfigAndIO {
 
                                 let checkpoint_extra_files = repo_files
                                     .iter()
-                                    .filter(|file| {
-                                        file.ends_with("config.json")
-                                            || file.ends_with("tokenizer.json")
-                                            || file.ends_with("tokenizer_config.json")
-                                            || file.ends_with("special_tokens_map.json")
-                                            || file.ends_with("generation_config.json")
-                                            || file.ends_with(".py")
-                                    })
+                                    .filter(|file| is_checkpoint_extra_file(file))
                                     .cloned()
                                     .collect();
                                 let tokenizer = Arc::new(auto_tokenizer(&repo_files)?);
@@ -917,5 +926,41 @@ impl RunInitConfigAndIO {
             tx_broadcast_finished,
             stats_logger,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CHECKPOINT_EXTRA_FILE_NAMES, is_checkpoint_extra_file};
+    use std::path::Path;
+
+    #[test]
+    fn checkpoint_extra_file_filter_includes_model_metadata() {
+        for file_name in CHECKPOINT_EXTRA_FILE_NAMES {
+            assert!(
+                is_checkpoint_extra_file(&PathBuf::from(file_name)),
+                "expected {file_name} to be included"
+            );
+        }
+        assert!(is_checkpoint_extra_file(&PathBuf::from("modeling_custom.py")));
+        assert!(is_checkpoint_extra_file(&PathBuf::from(
+            "some/nested/dir/tokenizer_config.json"
+        )));
+    }
+
+    #[test]
+    fn checkpoint_extra_file_filter_excludes_weights_and_readmes() {
+        for file_name in [
+            "model.safetensors",
+            "model-00001-of-00002.safetensors",
+            "model.safetensors.index.json",
+            "README.md",
+            "training_args.bin",
+        ] {
+            assert!(
+                !is_checkpoint_extra_file(&PathBuf::from(file_name)),
+                "expected {file_name} to be excluded"
+            );
+        }
     }
 }

@@ -1,4 +1,5 @@
 use crate::errors::UploadError;
+use crate::file_extensions::MODEL_FILE_EXTENSIONS;
 use crate::hub::model::HubRepo;
 use hf_hub::{
     Cache, Repo, RepoType,
@@ -13,7 +14,6 @@ use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-const MODEL_EXTENSIONS: [&str; 3] = [".safetensors", ".json", ".py"];
 const DATASET_EXTENSIONS: [&str; 1] = [".parquet"];
 
 /// Strip leading/trailing whitespace and control characters from a repo identifier.
@@ -107,7 +107,7 @@ pub async fn download_model_repo_async(
         token,
         max_concurrent_downloads,
         progress_bar,
-        &MODEL_EXTENSIONS,
+        &MODEL_FILE_EXTENSIONS,
     )
     .await
 }
@@ -180,7 +180,7 @@ pub fn download_model_repo_sync(
         cache,
         token,
         progress_bar,
-        &MODEL_EXTENSIONS,
+        &MODEL_FILE_EXTENSIONS,
     )
 }
 
@@ -273,4 +273,43 @@ pub async fn upload_to_hub(
         .map_err(|_| UploadError::SendCheckpoint)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MODEL_FILE_EXTENSIONS, check_extensions};
+    use hf_hub::api::Siblings;
+
+    #[test]
+    fn model_extensions_include_tokenizer_artifacts() {
+        for file_name in [
+            "merges.txt",
+            "tokenizer.model",
+            "chat_template.jinja",
+            "config.json",
+            "added_tokens.json",
+            "model.safetensors",
+        ] {
+            let sibling = Siblings {
+                rfilename: file_name.to_string(),
+            };
+            assert!(
+                check_extensions(&sibling, &MODEL_FILE_EXTENSIONS),
+                "expected {file_name} to be downloaded"
+            );
+        }
+    }
+
+    #[test]
+    fn model_extensions_exclude_non_model_files() {
+        for file_name in ["README.md", "training_args.bin"] {
+            let sibling = Siblings {
+                rfilename: file_name.to_string(),
+            };
+            assert!(
+                !check_extensions(&sibling, &MODEL_FILE_EXTENSIONS),
+                "expected {file_name} to be skipped"
+            );
+        }
+    }
 }
