@@ -18,6 +18,8 @@
   - [Rewards](./explain/rewards.md)
   - [Glossary](./explain/glossary.md)
 
+- [Node Operator Guide](./explain/operator-guide.md)
+
 - [Development](./development/index.md)
   - [Setup & Useful Commands](./development/setup.md)
   - [Running on-chain](./development/running-onchain.md)
