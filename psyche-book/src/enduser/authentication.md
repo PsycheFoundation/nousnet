@@ -20,7 +20,7 @@ A Training run can be configured to be restricted to only a set of whitelisted k
 
 ## Permissionless Runs
 
-Permissionless runs are open to anyone without any `authorization` required. The owner of the run can set this for a run when creating it. This type of authorization can be made by creating an `authorization` with a special `authorizer` valid for everyone: `11111111111111111111111111111111`
+Permissionless runs are open to anyone without any `authorization` required. The owner of the run can set this for a run when creating it. This type of authorization can be made by creating an `authorization` with a special `authorizer` valid for everyone: `11111111111111111111111111111111` (the Solana system program address).
 
 A CLI is provided for this:
 
@@ -28,8 +28,10 @@ A CLI is provided for this:
 run-manager join-authorization-create \
     --rpc [RPC] \
     --wallet-private-key-path [JOIN_AUTHORITY_KEYPAIR_FILE] \
-    --authorizer 11111111111111111111111111111111
+    --permissionless
 ```
+
+The `--permissionless` flag is equivalent to passing `--authorizer 11111111111111111111111111111111`.
 
 ## Permissioned Runs
 

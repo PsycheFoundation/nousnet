@@ -1,6 +1,7 @@
 use crate::commands::Command;
 use anchor_client::solana_sdk::pubkey::Pubkey;
-use anyhow::Result;
+use anchor_client::solana_sdk::system_program;
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 use clap::Args;
 
@@ -11,21 +12,44 @@ use psyche_solana_rpc::instructions;
 #[command()]
 pub struct CommandJoinAuthorizationCreate {
     #[clap(long, env)]
-    pub authorizer: Pubkey,
+    pub authorizer: Option<Pubkey>,
+
+    /// Make the authorization permissionless (valid for everyone) instead of
+    /// granting it to a specific authorizer
+    #[clap(long, default_value_t = false)]
+    pub permissionless: bool,
 }
 
 #[async_trait]
 impl Command for CommandJoinAuthorizationCreate {
     async fn execute(self, backend: SolanaBackend) -> Result<()> {
-        let Self { authorizer } = self;
+        let Self {
+            authorizer,
+            permissionless,
+        } = self;
+
+        let grantee = match (permissionless, authorizer) {
+            (true, Some(_)) => bail!(
+                "--permissionless and --authorizer are mutually exclusive: a permissionless \
+                 authorization is valid for everyone and cannot target a specific key"
+            ),
+            (true, None) => system_program::ID,
+            (false, None) => bail!(
+                "either --authorizer or --permissionless must be provided"
+            ),
+            (false, Some(authorizer)) => authorizer,
+        };
 
         let payer = backend.get_payer();
         let grantor = backend.get_payer();
-        let grantee = authorizer;
         let scope = psyche_solana_coordinator::logic::JOIN_RUN_AUTHORIZATION_SCOPE;
 
         println!("Authorization Grantor: {}", grantor);
-        println!("Authorization Grantee: {}", grantee);
+        println!(
+            "Authorization Grantee: {}{}",
+            grantee,
+            if permissionless { " (permissionless)" } else { "" }
+        );
 
         let authorization_address =
             psyche_solana_authorizer::find_authorization(&grantor, &grantee, scope);
