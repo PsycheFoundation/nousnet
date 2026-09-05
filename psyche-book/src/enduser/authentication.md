@@ -76,4 +76,4 @@ run-manager join-authorization-delete \
 
 To see how the authorization creation for a real run fits in the configuration see the [Authorization section](./create-run.md#Setting-up-Join-Authorizations) in the create run guide.
 
-The source code for the `authorizer` smart contract used by the Psyche's coordinator can be found here with its readme: <https://github.com/PsycheFoundation/psyche/tree/main/architectures/decentralized/solana-authorizer>
+The source code for the `authorizer` smart contract used by the Psyche's coordinator can be found here with its readme: <https://github.com/PsycheFoundation/nousnet/tree/main/architectures/decentralized/solana-authorizer>

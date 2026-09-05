@@ -17,4 +17,4 @@
 - Do I need a Solana wallet to train? Does it need to have funds?
   - Yes, even if you want to join a run that does not track rewards you will need a Solana wallet with funds to pay for the transactions to the coordinator.
 - Are the client and coordinator open-source? Can I report bugs?
-  - Yes, you may check [Psyche's github repo](https://github.com/PsycheFoundation/psyche)
+  - Yes, you may check [Psyche's github repo](https://github.com/PsycheFoundation/nousnet)

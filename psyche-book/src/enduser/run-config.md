@@ -5,7 +5,7 @@ It's a `.toml` file with information about the model shape, size, checkpoints, o
 
 There's two top-level values in a run configuration: a `config`, and a `model`.
 
-While some examples are described below, you can find the full range of options [for the coordinator here](https://github.com/PsycheFoundation/psyche/blob/main/shared/coordinator/src/coordinator.rs) and [for the model here](https://github.com/PsycheFoundation/psyche/blob/main/shared/coordinator/src/model.rs)
+While some examples are described below, you can find the full range of options [for the coordinator here](https://github.com/PsycheFoundation/nousnet/blob/main/shared/coordinator/src/coordinator.rs) and [for the model here](https://github.com/PsycheFoundation/nousnet/blob/main/shared/coordinator/src/model.rs)
 
 ## Config
 

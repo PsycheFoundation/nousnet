@@ -2,9 +2,9 @@
 
 ### **Found a bug?**
 
-- **Make sure we're not already aware of it** by checking [GitHub Issues](https://github.com/PsycheFoundation/psyche/issues).
+- **Make sure we're not already aware of it** by checking [GitHub Issues](https://github.com/PsycheFoundation/nousnet/issues).
 
-- If it seems your bug is new, [open an issue](https://github.com/PsycheFoundation/psyche/issues). Describe the expected & actual behaviour in as much detail as possible, ensuring to include system information (CUDA? CPU?) and any relevant command-line params (data parallelism? tensor parallelism? compression ratio?).
+- If it seems your bug is new, [open an issue](https://github.com/PsycheFoundation/nousnet/issues). Describe the expected & actual behaviour in as much detail as possible, ensuring to include system information (CUDA? CPU?) and any relevant command-line params (data parallelism? tensor parallelism? compression ratio?).
 
 ### **Fixed a bug?**
 
