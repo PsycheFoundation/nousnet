@@ -1,4 +1,4 @@
-# End-user configuration
+# End-user usage
 
 ## Joining a run
 

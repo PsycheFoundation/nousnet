@@ -1,4 +1,4 @@
-# Quickstart: Providing Compute to NousNet
+# Quickstart: Providing Compute to Psyche
 
 This guide walks you through the complete process of setting up your machine to provide compute to a NousNet training run. It assumes you have been provided the `run-manager` binary by the run administrator.
 
