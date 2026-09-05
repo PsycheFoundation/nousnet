@@ -22,6 +22,7 @@ use commands::authorization::{
     CommandJoinAuthorizationDelete, CommandJoinAuthorizationRead,
 };
 use commands::can_join::CommandCanJoin;
+use commands::keygen::CommandKeygen;
 use commands::run::{
     CommandCheckpoint, CommandCloseRun, CommandCreateRun, CommandDownloadResults,
     CommandJsonDumpRun, CommandJsonDumpUser, CommandSetFutureEpochRates, CommandSetPaused,
@@ -240,6 +241,12 @@ enum Commands {
         params: CommandCanJoin,
     },
 
+    // Generate a new keypair
+    Keygen {
+        #[clap(flatten)]
+        params: CommandKeygen,
+    },
+
     /// List joinable runs on the coordinator program
     ListRuns {
         /// Path to .env file with RPC and wallet configuration
@@ -418,6 +425,7 @@ async fn async_main() -> Result<()> {
         Commands::CanJoin { cluster, params } => {
             params.execute(create_backend_readonly(cluster)?).await
         }
+        Commands::Keygen { params } => params.execute(),
         Commands::ListRuns {
             env_file,
             cluster,

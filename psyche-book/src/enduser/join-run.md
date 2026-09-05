@@ -44,7 +44,13 @@ To install the NVIDIA Container Toolkit, follow the [NVIDIA Container Toolkit in
 
 You need a Solana keypair (wallet) to participate in training. This keypair identifies your client on the blockchain.
 
-If you need to create a new keypair, you can use the Solana CLI, specifying where you want to create it
+If you need to create a new keypair, you can use the run manager itself, specifying where you want to create it
+
+```bash
+run-manager keygen --output <path/to/keypair/file.json>
+```
+
+Alternatively, use the Solana CLI, which produces the same file format
 
 ```bash
 solana-keygen new --outfile <path/to/keypair/file.json>
