@@ -928,3 +928,39 @@ impl RunInitConfigAndIO {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CHECKPOINT_EXTRA_FILE_NAMES, is_checkpoint_extra_file};
+    use std::path::Path;
+
+    #[test]
+    fn checkpoint_extra_file_filter_includes_model_metadata() {
+        for file_name in CHECKPOINT_EXTRA_FILE_NAMES {
+            assert!(
+                is_checkpoint_extra_file(&PathBuf::from(file_name)),
+                "expected {file_name} to be included"
+            );
+        }
+        assert!(is_checkpoint_extra_file(&PathBuf::from("modeling_custom.py")));
+        assert!(is_checkpoint_extra_file(&PathBuf::from(
+            "some/nested/dir/tokenizer_config.json"
+        )));
+    }
+
+    #[test]
+    fn checkpoint_extra_file_filter_excludes_weights_and_readmes() {
+        for file_name in [
+            "model.safetensors",
+            "model-00001-of-00002.safetensors",
+            "model.safetensors.index.json",
+            "README.md",
+            "training_args.bin",
+        ] {
+            assert!(
+                !is_checkpoint_extra_file(&PathBuf::from(file_name)),
+                "expected {file_name} to be excluded"
+            );
+        }
+    }
+}

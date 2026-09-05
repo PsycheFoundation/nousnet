@@ -274,3 +274,42 @@ pub async fn upload_to_hub(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{MODEL_FILE_EXTENSIONS, check_extensions};
+    use hf_hub::api::Siblings;
+
+    #[test]
+    fn model_extensions_include_tokenizer_artifacts() {
+        for file_name in [
+            "merges.txt",
+            "tokenizer.model",
+            "chat_template.jinja",
+            "config.json",
+            "added_tokens.json",
+            "model.safetensors",
+        ] {
+            let sibling = Siblings {
+                rfilename: file_name.to_string(),
+            };
+            assert!(
+                check_extensions(&sibling, &MODEL_FILE_EXTENSIONS),
+                "expected {file_name} to be downloaded"
+            );
+        }
+    }
+
+    #[test]
+    fn model_extensions_exclude_non_model_files() {
+        for file_name in ["README.md", "training_args.bin"] {
+            let sibling = Siblings {
+                rfilename: file_name.to_string(),
+            };
+            assert!(
+                !check_extensions(&sibling, &MODEL_FILE_EXTENSIONS),
+                "expected {file_name} to be skipped"
+            );
+        }
+    }
+}
