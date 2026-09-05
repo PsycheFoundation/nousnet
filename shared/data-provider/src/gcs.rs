@@ -1,4 +1,5 @@
 use crate::errors::{DownloadError, UploadError};
+use crate::file_extensions::MODEL_FILE_EXTENSIONS;
 use chrono::{DateTime, Utc};
 use google_cloud_storage::client::{Client, ClientConfig};
 use google_cloud_storage::http::objects::upload::Media;
@@ -50,8 +51,6 @@ pub struct GcsManifestMetadata {
     pub epoch: u32,
     pub run_id: String,
 }
-
-const MODEL_EXTENSIONS: [&str; 3] = [".safetensors", ".json", ".py"];
 
 fn get_cache_base(bucket: &str) -> PathBuf {
     // Use HF_HOME if set, otherwise fall back to ~/.cache
@@ -185,7 +184,7 @@ pub async fn download_model_from_gcs_async(
             info!("No manifest found, downloading model without manifest");
             let cache_dir = get_cache_dir_no_manifest(bucket, prefix);
             std::fs::create_dir_all(&cache_dir)?;
-            download_files_no_manifest(&client, bucket, prefix, &cache_dir, &MODEL_EXTENSIONS).await
+            download_files_no_manifest(&client, bucket, prefix, &cache_dir, &MODEL_FILE_EXTENSIONS).await
         }
     }
 }

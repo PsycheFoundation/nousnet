@@ -16,7 +16,7 @@ pub use data_provider::DataProvider;
 pub use dataset::{Dataset, Field, Row, Split};
 pub use dummy::DummyDataProvider;
 pub use errors::{DownloadError, UploadError};
-pub use file_extensions::{DATA_FILE_EXTENSIONS, PARQUET_EXTENSION};
+pub use file_extensions::{DATA_FILE_EXTENSIONS, MODEL_FILE_EXTENSIONS, PARQUET_EXTENSION};
 pub use gcs::{
     GcsCheckpointManifest, GcsManifestMetadata, GcsUploadInfo, ManifestFileEntry, ManifestMetadata,
     download_model_from_gcs_async, download_model_from_gcs_sync, upload_to_gcs,

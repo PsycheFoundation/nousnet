@@ -1,4 +1,5 @@
 use crate::errors::UploadError;
+use crate::file_extensions::MODEL_FILE_EXTENSIONS;
 use crate::hub::model::HubRepo;
 use hf_hub::{
     Cache, Repo, RepoType,
@@ -13,7 +14,6 @@ use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-const MODEL_EXTENSIONS: [&str; 3] = [".safetensors", ".json", ".py"];
 const DATASET_EXTENSIONS: [&str; 1] = [".parquet"];
 
 /// Strip leading/trailing whitespace and control characters from a repo identifier.
@@ -107,7 +107,7 @@ pub async fn download_model_repo_async(
         token,
         max_concurrent_downloads,
         progress_bar,
-        &MODEL_EXTENSIONS,
+        &MODEL_FILE_EXTENSIONS,
     )
     .await
 }
@@ -180,7 +180,7 @@ pub fn download_model_repo_sync(
         cache,
         token,
         progress_bar,
-        &MODEL_EXTENSIONS,
+        &MODEL_FILE_EXTENSIONS,
     )
 }
 
